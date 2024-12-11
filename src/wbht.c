@@ -38,24 +38,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
+#include "static.h"
 
-static struct
-{
-	uint8_t barrier[sizeof(void*) * 15];
-	struct thread* thread;
-}* channel;
-
-static unsigned nprocs = 0;
-static pthread_once_t once_control = PTHREAD_ONCE_INIT;
-static pthread_key_t key;
-static size_t thread_length;
-
-static uint8_t barrier_polling[sizeof(void*) * 15];
-static unsigned polling;
-static uint8_t barrier_scan[sizeof(void*) * 15];
-static unsigned scan;
-static uint8_t barrier_dial[sizeof(void*) * 15];
-static unsigned dial;
 #ifndef __OPTIMIZE__
 static unsigned sanity_check(void* ptr)
 {
@@ -88,28 +72,19 @@ static unsigned sanity_check(void* ptr)
 	return error;
 }
 #endif
-static void local_free(struct thread* thread, int64_t* front, int64_t* back);
-
-static void remote_free(struct thread* thread, void* ptr)
+static inline void destructor_free(struct thread* thread)
 {
-	do
+	void** free;
+	while((free = thread->free))
 	{
-		register unsigned i, j;
-		for(i = 0, j = polling, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
-		{
-			void** free = (void**)ptr;
-			*free = thread->channel[j].free;
-			__atomic_thread_fence(__ATOMIC_RELEASE);
-			if(__sync_bool_compare_and_swap(&thread->channel[j].free, *free, free))
-			{
-				polling++;
-				return;
-			}
-		}
-	} while(0 == sched_yield());
-	polling++;
+		int64_t* front; 
+		int64_t* back;
+		thread->free = (void**)*free;
+		front = ((int64_t*)free) - 1;
+		back = front - *front - 1;
+		local_free(thread, front, back);
+	}
 }
-
 
 static void destructor(register void* data)
 {
@@ -120,17 +95,17 @@ static void destructor(register void* data)
 		if((thread))
 		{
 			*local = NULL;
-			while((thread->free))
+			if((thread->free))
+				destructor_free(thread);
+			for(thread->polling = 0; thread->polling < nprocs; thread->polling++)
 			{
 				void** free;
-				if((free = thread->free))
+				if((free = (void**)thread->channel[thread->polling].free) 
+				&& __sync_bool_compare_and_swap(&thread->channel[thread->polling].free, free, NULL))
 				{
-					int64_t* front; 
-					int64_t* back;
-					thread->free = (void**)*free;
-					front = ((int64_t*)free) - 1;
-					back = front - *front - 1;
-					local_free(thread, front, back);
+					__atomic_thread_fence(__ATOMIC_ACQUIRE);
+					thread->free = free;
+					destructor_free(thread);
 				}
 			}
 			if(1 == thread->reference)
@@ -173,78 +148,6 @@ static void destructor(register void* data)
 	#undef local
 	}
 }
-
-static void init_routine(void)
-{
-	int fd;
-	char* buf;
-	size_t count;
-	const char* str;
-
-	WBHT_ASSERT(0 <= (fd = open("/proc/cpuinfo", O_RDONLY)));
-	buf = sbrk(0);
-	count = (size_t)buf;
-	count += PAGE_SIZE - 1;
-	count &= PAGE_MASK;
-	count -= (size_t)buf;
-	WBHT_ASSERT(0 == brk(buf + count));
-	while(count == read(fd, buf, count))
-	{
-		count += PAGE_SIZE;
-		WBHT_ASSERT(0 == brk(buf + count));
-	}
-	WBHT_ASSERT((str = strstr(buf, "cpu cores\t:")));
-	str += sizeof("cpu cores\t:");
-	nprocs = atoi(str);
-	close(fd);
-	channel = (void*)buf;
-	WBHT_ASSERT(0 == brk((void*)(channel + nprocs)));
-	for(count = 0; count < nprocs; count++)
-		channel[count].thread = NULL;
-	WBHT_ASSERT(0 == pthread_key_create(&key, destructor));
-	thread_length = offsetof(struct thread, channel) + sizeof(*((struct thread*)NULL)->channel) * nprocs;
-	thread_length += PAGE_SIZE - 1;
-	thread_length &= PAGE_MASK;
-}
-
-static inline struct thread* thread_initial(struct thread** local)
-{
-	int r;
-	struct thread* thread;
-
-	if(0 == nprocs)
-		WBHT_ASSERT(0 == pthread_once(&once_control, init_routine));
-	do
-	{
-		register unsigned i, j;
-		r = 0;
-		for(i = 0, j = dial, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
-		{
-			if(thread = (struct thread*)channel[j].thread)
-			{
-				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				if(__sync_bool_compare_and_swap(&channel[j].thread, thread, thread->next))
-				{
-					*local = thread;
-					if(NULL == pthread_getspecific(key))
-						pthread_setspecific(key, (const void*)local);
-					dial++;
-					return thread;
-				}
-				else
-					r++;
-			}
-		}
-	} while(0 < r && 0 == sched_yield());
-	dial++;
-
-	WBHT_ASSERT(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
-	*local = thread;
-	pthread_setspecific(key, (const void*)local);
-	return thread;
-}
-
-static _Thread_local struct thread* local = NULL;
 
 #define HEAP_LIMIT (int64_t)(sizeof(struct heap) / sizeof(int64_t))
 
@@ -684,6 +587,26 @@ static inline int64_t* boundary(int64_t* front, const char* file, int line)
 	return back;
 }
 
+static void remote_free(struct thread* thread, void* ptr)
+{
+	do
+	{
+		register unsigned i, j;
+		for(i = 0, j = polling, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
+		{
+			void** free = (void**)ptr;
+			*free = thread->channel[j].free;
+			__atomic_thread_fence(__ATOMIC_RELEASE);
+			if(__sync_bool_compare_and_swap(&thread->channel[j].free, *free, free))
+			{
+				polling++;
+				return;
+			}
+		}
+	} while(0 == sched_yield());
+	polling++;
+}
+
 WEAK void wbht_free(void* ptr)
 {
 	struct thread* thread;
@@ -989,45 +912,4 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 	return NULL;
 }
 
-WEAK void* wbht_reallocf(void *ptr, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
-WEAK void *wbht_reallocarray(void *ptr, size_t nmemb, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
-WEAK void* wbht_aligned_alloc(size_t alignment, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
-WEAK int wbht_posix_memalign(void **memptr, size_t alignment, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return -1;
-}
-
-WEAK void* wbht_valloc(size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
-WEAK void* wbht_memalign(size_t alignment, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
-WEAK void* wbht_pvalloc(size_t alignment, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
-}
-
+#include "weak.h"

@@ -33,22 +33,30 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "private.h"
 #include "heap.h"
-
+#ifdef __btff_h__
+struct btree;
+#endif
 struct thread
 {
 	struct thread* next;
 	struct heap* root;
-#ifdef CACHE
-	struct heap** cache;
-#endif
-	int reference;
-	void** free;
 	unsigned polling;
+#ifdef __btff_h__
+	size_t addr;
+	size_t length;
+	struct btree* btree;
+	struct btree* local;
+	uint64_t barrier[sizeof(void*) * 15];
+	struct btree* remote;
+#else
+	void** free;
+	int reference;
 	struct
 	{
 		uint8_t barrier[sizeof(void*) * 15];
 		void** free;
 	} channel[1];
+#endif
 };
 
 #endif/*__thread_h__*/

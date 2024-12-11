@@ -29,24 +29,36 @@
 #
 CC=gcc
 CXX=g++
-CFLAGS=-Iinc -fPIC -O3
-LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
+CFLAGS=-Iinc -fPIC -g
+WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
+BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc
 AR=ar
 
 .PHONY: lib
-lib: lib/libwbht.a lib/libwbht.so
+lib: lib/libwbht.so lib/libbtff.so
 
-lib/libwbht.so: src/wbht.o
-	$(CC) $(CFLAGS) -shared $? $(LDFLAGS) -o $@
+lib/libwbht.so: lib/libwbht.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
+
+lib/libbtff.so: lib/libbtff.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
 
+lib/libbtff.a: src/btff.o src/btree.o
+	$(AR) rs $@ $?
+
+.PHONY: 
+test: lib
+	make -C test
+
+.PHONY: 
+bench: lib
+	make -C bench
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
-
-%.o: %.cpp
-	$(CXX) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:
@@ -55,7 +67,9 @@ clean:
 
 .PHONY: dep
 dep:
-	$(CC) $(CFLAGS) -M inc/*.h src/*.c > .dep
+	$(CC) $(CFLAGS) -M src/*.c > .dep
+	make -C test dep
+	make -C bench dep
 
 ifeq (1, $(shell if [ -e .dep ]; then echo 1; fi))
 include .dep
