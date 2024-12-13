@@ -379,11 +379,13 @@ WEAK void btff_free(void* ptr)
 				remote = btree->thread;
 				if(remote == thread)
 				{
+				#ifndef __OPTIMIZE__
 					if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
 					{
 						BTFF_PRINTF(stderr, "%p %p %p %lu %p %hu %lu corruption %s %d\n", ptr, btree, &btree_left, (size_t)&btree->payload[btree_left] - (size_t)btree->payload, &btree->payload[btree_left], btree_left, (size_t)&btree->payload[btree_left] - (size_t)ptr, __FILE__, __LINE__);
 						return;
 					}
+				#endif
 					if(btree_left == (disp = (uint64_t*)ptr - btree->payload))
 						destruct = !last_free(btree);
 					else
@@ -392,6 +394,11 @@ WEAK void btff_free(void* ptr)
 				else
 				if((remote))
 				{
+					if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+					{
+						BTFF_PRINTF(stderr, "%p %p %p %lu %p %hu %lu corruption %s %d\n", ptr, btree, &btree_left, (size_t)&btree->payload[btree_left] - (size_t)btree->payload, &btree->payload[btree_left], btree_left, (size_t)&btree->payload[btree_left] - (size_t)ptr, __FILE__, __LINE__);
+						return;
+					}
 					if(unlikely(thread->local))
 						destruct = _thread_local(thread);
 					_remote_free(remote, btree, ptr);
@@ -430,7 +437,10 @@ WEAK void btff_free(void* ptr)
 				{
 					if(likely(thread->local))
 						destruct = _thread_local(thread);
-					_remote_free(remote, btree, ptr);
+					if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+						BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+					else
+						_remote_free(remote, btree, ptr);
 				}
 				else
 				{
@@ -623,7 +633,10 @@ WEAK void* btff_realloc(void *ptr, size_t size)
 					if((dst = btff_alloc(thread, size, delta)))
 						memcpy(dst, ptr, size);
 				}
-				_remote_free(btree->thread, btree, ptr);
+				if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+					BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+				else
+					_remote_free(btree->thread, btree, ptr);
 				return dst;
 			}
 			else
