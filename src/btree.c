@@ -1143,6 +1143,7 @@ WEAK struct thread* last_free(struct btree* btree) /* remove from left most */
 			leaf_decrease(btree, INT16_MIN, btree_root);
 		leaf_remove(node, 0, 1);
 	}
+#ifndef __OPTIMIZE__
 	if(unlikely(btree_protect + PAGE_SIZE / sizeof(void*) <= btree_left))
 	{
 		size_t length = 0;
@@ -1152,11 +1153,13 @@ WEAK struct thread* last_free(struct btree* btree) /* remove from left most */
 		BTFF_ASSERT(MAP_FAILED != mmap((void*)&btree->payload[btree_protect], length, PROT_NONE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0));
 		btree_protect += length / sizeof(void*);
 	}
-
+#endif
 	if(unlikely(0 == node->leaf[LEAF_HALF - 1]))
 		btree_rebalance(btree, 0, btree_root);
 	if(unlikely(btree_left == btree_right))
 	{
+		if(thread->local == btree)
+			thread->local = NULL;
 		if(thread->btree == btree)
 		{
 			thread->btree = NULL;
@@ -1294,6 +1297,9 @@ WEAK void btree_free(struct btree* btree, int16_t disp)
 	{
 	case -1:
 		BTFF_PRINTF(stderr, "*** btff detected *** : double free or corruption : %p *** %s %d\n", btree->payload + disp, __FILE__, __LINE__);
+#ifndef __OPTIMIZE__
+		btree_sanity(btree);
+#endif
 		break;
 	case 0:
 		node = &btree->node[btree_stack(0, NODE)];
@@ -1533,6 +1539,7 @@ WEAK void* btree_page(struct thread* thread, size_t alignment, size_t size)
 				thread->btree = btree;
 				BTFF_ASSERT(0 == mprotect((void*)btree->node, PAGE_SIZE, PROT_READ|PROT_WRITE));
 				btree_node_top++;
+				btree_next = MAP_FAILED;
 				if(sizeof(void*) >= alignment)
 					return last_alloc(btree, (size + sizeof(void*) - 1) >> 3);
 				else
@@ -1615,6 +1622,9 @@ WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta)
 	{
 	case -1:
 		BTFF_PRINTF(stderr, "*** btff detected *** : double free or corruption : %p *** %s %d\n", btree->payload + disp, __FILE__, __LINE__);
+#ifndef __OPTIMIZE__
+		btree_sanity(btree);
+#endif
 		break;
 	case 0: /* leaf */
 		node = &btree->node[btree_stack(0, NODE)];
@@ -1629,7 +1639,6 @@ WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta)
 		{
 			if(unlikely(LEAF_NMEMB - 1 == n))
 			{
-				disp = btree->leaf[n];
 				if(unlikely(disp - node->leaf[n] == btree_right))
 				{
 					size = -1 * node->leaf[n];
@@ -1643,9 +1652,9 @@ WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta)
 					r = btree_stack(h, BRANCH) + 1;
 					if(delta < right->space[r])
 					{
+						right->child[r] += delta;
 						btree_stack(h, BRANCH) = r;
 						node_decrease(btree, h, right->space[r] - delta, btree_root);
-						right->child[r] -= delta;
 						node->leaf[n] -= delta;
 					}
 					else
@@ -1656,9 +1665,9 @@ WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta)
 					}
 					else
 					{
+						right->child[r] += node->leaf[n];
 						btree_stack(h, BRANCH) = r;
 						node_decrease(btree, h, -1 * right->space[r] + node->leaf[n], btree_root);
-						right->child[r] += node->leaf[n];
 						node->leaf[n] = 0;
 					}
 				}

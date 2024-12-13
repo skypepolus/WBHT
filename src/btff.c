@@ -45,26 +45,28 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 static unsigned _thread_local(struct thread* thread)
 {
 	struct btree* btree = thread->local;
-	if((btree->local))
+	void** free;
+	if((free = btree_local))
 	{
-		void** ptr = btree->local;
 		int16_t disp;
-		if(NULL == (btree->local = *ptr))
+		if(NULL == (btree_local = (void**)*free))
+		{
 			thread->local = NULL;
-		if(btree_left == (disp = (uint64_t*)ptr - btree->payload))
+			btree_next = MAP_FAILED;
+		}
+		disp = (uint64_t*)free - btree->payload;
+		if(btree_left == disp)
 			return !last_free(btree);
 		else
 			btree_free(btree, disp);
 	}
 	else
-	if((btree->remote))
+	if((free = btree_remote))
 	{
-		void** old = btree->remote;
-		if(__sync_bool_compare_and_swap(&btree->remote, old, NULL))
+		if(__sync_bool_compare_and_swap(&btree_remote, free, NULL))
 		{
 			__atomic_thread_fence(__ATOMIC_ACQUIRE);
-			btree->local = old;
-			return 0;
+			btree_local = free;
 		}
 	}
 	return 0;
@@ -74,7 +76,7 @@ static void _thread_remote(struct thread* thread)
 {
 	struct btree* btree = thread->remote;
 	__atomic_thread_fence(__ATOMIC_ACQUIRE);
-	if(__sync_bool_compare_and_swap(&thread->remote, btree, btree->next))
+	if(__sync_bool_compare_and_swap(&thread->remote, btree, btree_next))
 		thread->local = btree;
 }
 
@@ -92,7 +94,8 @@ static void destructor(register void* data)
 					_thread_local(thread);
 					if((thread->local))
 					{
-						if((thread->local->remote))
+						struct btree* btree = thread->local;
+						if((btree_remote))
 							goto BREAK;
 					}
 					else
@@ -108,7 +111,8 @@ static void destructor(register void* data)
 							_thread_local(thread);
 							if((thread->local))
 							{
-								if((thread->local->remote))
+								struct btree* btree = thread->local;
+								if((btree_remote))
 									goto BREAK;
 							}
 							else
@@ -145,22 +149,22 @@ static void destructor(register void* data)
 	}
 }
 
-static void _remote_free(struct thread* remote, struct btree* btree, void* ptr)
+static void _remote_free(struct thread* thread, struct btree* btree, void* ptr)
 {
 	do
 	{
-		void** old;
-		*(void**)ptr = old = btree->remote;
+		void** free = (void**)ptr;
+		*free = btree_remote;
 		__atomic_thread_fence(__ATOMIC_RELEASE);
-		if(__sync_bool_compare_and_swap(&btree->remote, old, (void**)ptr))
+		if(__sync_bool_compare_and_swap(&btree_remote, *free, free))
 		{
-			if(NULL == old)
+			if(MAP_FAILED == btree_next
+			&& __sync_bool_compare_and_swap(&btree_next, MAP_FAILED, NULL))
 				do
 				{
-					struct btree* old;
-					btree->next = old = remote->remote;
+					btree_next = thread->remote;
 					__atomic_thread_fence(__ATOMIC_RELEASE);
-					if(__sync_bool_compare_and_swap(&remote->remote, old, btree))
+					if(__sync_bool_compare_and_swap(&thread->remote, btree_next, btree))
 						return;
 				} while(0 == sched_yield());
 			else
@@ -293,37 +297,39 @@ WEAK void* btff_malloc(size_t size)
 			if(BTREE_LIMIT < size)
 				_thread_local(thread);
 			else
-			{
+			{	
 				struct btree* btree = thread->local;
-				if(btree->local)
+				void** free;
+				if((free = btree_local))
 				{
-					void** ptr = btree->local;
-					int16_t disp = (uint64_t*)ptr - btree->payload;
-					if(NULL == (btree->local = *ptr))
-						thread->local = NULL;	
+					int16_t disp;
+					if(NULL == (btree_local = (void**)*free))
+					{
+						thread->local = NULL;
+						btree_next = MAP_FAILED;
+					}
+					disp = (uint64_t*)free - btree->payload;
 					if(0 == btree_realloc(btree, disp, delta))
 					#ifndef __OPTIMIZE__
-						return memset(ptr, 0, size);
+						return memset(free, 0, size);
 					#else
-						return (void*)ptr;
+						return (void*)free;
 					#endif
-					else
 					if(btree_left == disp)
 						last_free(btree);
 					else
 						btree_free(btree, disp);
 				}
 				else
-				if(btree->remote)
+				if((free = btree_remote))
 				{
-					void** old = btree->remote;
-					if(__sync_bool_compare_and_swap(&btree->remote, old, NULL))
+					if(__sync_bool_compare_and_swap(&btree_remote, free, NULL))
 					{
 						__atomic_thread_fence(__ATOMIC_ACQUIRE);
-						btree->local = old;
+						btree_local = free;
 					}
 				}
-			}
+			} 
 		}
 	}
 	else
@@ -370,14 +376,14 @@ WEAK void btff_free(void* ptr)
 			{
 				struct thread* remote;
 				btree = BTREE(ptr);
-				if((uint64_t*)ptr < &btree->payload[btree_left]) 
-				{
-					BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
-					return;
-				}
 				remote = btree->thread;
 				if(remote == thread)
 				{
+					if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+					{
+						BTFF_PRINTF(stderr, "%p %p %p %lu %p %hu %lu corruption %s %d\n", ptr, btree, &btree_left, (size_t)&btree->payload[btree_left] - (size_t)btree->payload, &btree->payload[btree_left], btree_left, (size_t)&btree->payload[btree_left] - (size_t)ptr, __FILE__, __LINE__);
+						return;
+					}
 					if(btree_left == (disp = (uint64_t*)ptr - btree->payload))
 						destruct = !last_free(btree);
 					else
@@ -578,6 +584,7 @@ WEAK void* btff_realloc(void *ptr, size_t size)
 				{
 					disp = (uint64_t*)ptr - btree->payload;
 					delta = (size + sizeof(void*) - 1) >> 3;
+					BTFF_ASSERT(size <= ((size_t)delta) << 3);
 					if(0 == (n = btree_realloc(btree, disp, delta)))
 					#ifndef __OPTIMIZE__
 						return memset(ptr, 0, size);

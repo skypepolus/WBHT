@@ -29,7 +29,7 @@
 #
 CC=gcc
 CXX=g++
-CFLAGS=-Iinc -fPIC -g
+CFLAGS=-Iinc -fPIC -g -O3
 WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
 BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc
 AR=ar
@@ -62,8 +62,8 @@ bench: lib
 
 .PHONY: clean
 clean:
-	find . -name "*.[oa]" -exec rm -f {} \;
-	find . -name "*.so" -exec rm -f {} \;
+	find src -name "*.[oa]" -exec rm -f {} \;
+	find lib -name "*.so" -exec rm -f {} \;
 
 .PHONY: dep
 dep:

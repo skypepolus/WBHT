@@ -47,17 +47,17 @@ enum
 	HEADER_ROOT,
 	HEADER_STACK,
 	HEADER_TOP = HEADER_STACK + 7,
-	HEADER
+	HEADER_LOCAL,
+	HEADER_NEXT = HEADER_LOCAL + 7,
+	HEADER_REMOTE = HEADER_NEXT + 7,
+	HEADER = HEADER_REMOTE + 7
 };
-
-struct btree;
 
 #define BTREE_ALIGNMENT ((1UL << (16UL - 1UL)) * sizeof(void*))
 #define BTREE_BARRIER_SIZE PAGE_SIZE
-#define BTREE_PAYLOAD_SIZE (BTREE_ALIGNMENT - sizeof(struct thread*) - HEADER * sizeof(header_t)  - sizeof(node_t*) - sizeof(struct heap) - sizeof(void**) - LEAF_NMEMB * sizeof(uint16_t) - sizeof(void**) - sizeof(struct btree*))
-#define BTREE_PTR_SIZE (sizeof(void*) * 65536)
+#define BTREE_PAYLOAD_SIZE (BTREE_ALIGNMENT - sizeof(struct thread*) - HEADER * sizeof(header_t)  - sizeof(node_t*) - sizeof(struct heap) - LEAF_NMEMB * sizeof(uint16_t))
 #define BTREE_NODE_SIZE (502UL * BTREE_PAYLOAD_SIZE / 800UL + PAGE_SIZE - 1UL & PAGE_MASK)
-#define BTREE_LENGTH (BTREE_ALIGNMENT + BTREE_BARRIER_SIZE + BTREE_PTR_SIZE + BTREE_NODE_SIZE)
+#define BTREE_LENGTH (BTREE_ALIGNMENT + BTREE_BARRIER_SIZE + BTREE_NODE_SIZE)
 #define BTREE_LIMIT (BTREE_PAYLOAD_SIZE & PAGE_MASK)
 
 struct thread;
@@ -68,13 +68,9 @@ struct btree
 	header_t header[HEADER];
 	node_t* free;
 	struct heap heap;
-	void** local;
 	uint16_t leaf[LEAF_NMEMB];
-	void** remote;
-	struct btree* next;
 	uint64_t payload[BTREE_PAYLOAD_SIZE / sizeof(uint64_t)];
 	uint8_t barrier[BTREE_BARRIER_SIZE];
-	void* ptr[BTREE_PTR_SIZE / sizeof(void*)];
 	node_t node[BTREE_NODE_SIZE / sizeof(node_t)];
 };
 
@@ -96,6 +92,9 @@ struct btree
 #define btree_space btree->header[HEADER_SPACE].int16[0]
 #define btree_stack(height, name) btree->header[HEADER_STACK + height].int16[name] 
 #define btree_right (int16_t)(sizeof(btree->payload) / sizeof(*btree->payload))
+#define btree_local ((void***)btree->header[HEADER_LOCAL].int64)[0]
+#define btree_next ((struct btree**)btree->header[HEADER_NEXT].int64)[0]
+#define btree_remote ((void***)btree->header[HEADER_REMOTE].int64)[0]
 
 WEAK void btree_free(struct btree* btree, int16_t disp) PRIVATE(btree_free);
 WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta) PRIVATE(btree_realloc);
