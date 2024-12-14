@@ -232,7 +232,7 @@ static inline int16_t leaf_left(struct btree* btree)
 	}
 	return btree_left;
 }
-
+#ifndef __OPTIMIZE__
 static inline int16_t leaf_sum(node_t* node)
 {
 	int16_t sum, i;
@@ -245,7 +245,7 @@ static inline int16_t leaf_sum(node_t* node)
 	}
 	return sum;
 }
-
+#endif
 static inline int16_t btree_search(struct btree* btree, int16_t disp)
 {
 	int16_t h;
@@ -1015,9 +1015,6 @@ static inline void node_split(struct btree* btree, node_t* node, struct split* s
 	
 	split->left.max = node_max(left);
 	split->right.max = node_max(right);
-
-
-
 }
 
 static inline void node_insert(struct btree* btree, node_t* node, int16_t branch, struct split* split)
@@ -1143,7 +1140,7 @@ WEAK struct thread* last_free(struct btree* btree) /* remove from left most */
 			leaf_decrease(btree, INT16_MIN, btree_root);
 		leaf_remove(node, 0, 1);
 	}
-#ifndef __OPTIMIZE__
+
 	if(unlikely(btree_protect + PAGE_SIZE / sizeof(void*) <= btree_left))
 	{
 		size_t length = 0;
@@ -1153,7 +1150,7 @@ WEAK struct thread* last_free(struct btree* btree) /* remove from left most */
 		BTFF_ASSERT(MAP_FAILED != mmap((void*)&btree->payload[btree_protect], length, PROT_NONE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0));
 		btree_protect += length / sizeof(void*);
 	}
-#endif
+
 	if(unlikely(0 == node->leaf[LEAF_HALF - 1]))
 		btree_rebalance(btree, 0, btree_root);
 	if(unlikely(btree_left == btree_right))
