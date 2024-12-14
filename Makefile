@@ -43,10 +43,16 @@ lib/libwbht.so: lib/libwbht.a
 lib/libbtff.so: lib/libbtff.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
+lib/libavx2btff.so: lib/libavx2btff.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
+
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
 
 lib/libbtff.a: src/btff.o src/btree.o
+	$(AR) rs $@ $?
+
+lib/libavx2btff.a: src/btff.o src/avx2btree.o
 	$(AR) rs $@ $?
 
 .PHONY: 
@@ -56,6 +62,9 @@ test: lib
 .PHONY: 
 bench: lib
 	make -C bench
+
+avx%.o: %.c
+	$(CC) $(CFLAGS) -DAVX2 -mavx2 -masm=intel -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
