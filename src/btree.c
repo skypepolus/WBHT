@@ -1013,14 +1013,14 @@ static const int16_t insert[][64] __attribute__((__aligned__(128))) = {
 { 0+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,31+32,30+32},
 { 0+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,30+32,31+32},
 };
-static inline void leaf_insert(node_t* node, int16_t i, int16_t delta)
+static inline void leaf_insert(register node_t* node, int16_t i, int16_t delta)
 {
 	asm volatile(
 		"VMOVDQA64 ZMM0,ZMMWORD PTR [%1]		\n\t"
 		"VPERMT2W ZMM0,ZMM0,ZMMWORD PTR [%0]	\n\t"
 		"VMOVDQA64 ZMMWORD PTR [%0],ZMM0		\n\t"
-	: "r"(node->leaf)
-	: "r"(insert[i])
+	: "+r"((uint64_t)node)
+	: "r"((uint64_t)&insert[i])
 	);
 	node->leaf[i] = delta;
 }
