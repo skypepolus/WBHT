@@ -28,10 +28,6 @@ static void init_routine(void)
 	char* buf;
 	size_t count;
 	const char* str;
-#ifdef AVX2
-	__builtin_cpu_init ();
-	assert(__builtin_cpu_supports ("avx2"));
-#endif
 	assert(0 <= (fd = open("/proc/cpuinfo", O_RDONLY)));
 	buf = sbrk(0);
 	count = (size_t)buf;
@@ -48,6 +44,9 @@ static void init_routine(void)
 	str += sizeof("cpu cores\t:");
 	nprocs = atoi(str);
 	close(fd);
+#ifdef AVX512F
+	assert((strstr(buf, "avx512f")));
+#endif
 	channel = (void*)buf;
 	assert(0 == brk((void*)(channel + nprocs)));
 	for(count = 0; count < nprocs; count++)

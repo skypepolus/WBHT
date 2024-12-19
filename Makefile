@@ -29,13 +29,13 @@
 #
 CC=gcc
 CXX=g++
-CFLAGS=-Iinc -fPIC -g
+CFLAGS=-Iinc -fPIC -O3
 WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
 BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc
 AR=ar
 
 .PHONY: lib
-lib: lib/libwbht.so lib/libbtff.so lib/libavx2btff.so
+lib: lib/libwbht.so lib/libbtff.so lib/libbtff-avx512f.so
 
 lib/libwbht.so: lib/libwbht.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
@@ -43,7 +43,7 @@ lib/libwbht.so: lib/libwbht.a
 lib/libbtff.so: lib/libbtff.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
-lib/libavx2btff.so: lib/libavx2btff.a
+lib/libbtff-avx512f.so: lib/libbtff-avx512f.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
@@ -52,7 +52,7 @@ lib/libwbht.a: src/wbht.o
 lib/libbtff.a: src/btff.o src/btree.o
 	$(AR) rs $@ $?
 
-lib/libavx2btff.a: src/avx2btff.o src/avx2btree.o
+lib/libbtff-avx512f.a: src/btff-avx512f.o src/btree-avx512f.o
 	$(AR) rs $@ $?
 
 .PHONY: 
@@ -63,8 +63,8 @@ test: lib
 bench: lib
 	make -C bench
 
-avx2%.o: %.c
-	$(CC) $(CFLAGS) -DAVX2 -march=native -mavx512f -masm=intel -mtune=intel -c $< -o $@
+%-avx512f.o: %.c
+	$(CC) $(CFLAGS) -DAVX512F -march=native -mavx512f -masm=intel -mtune=intel -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

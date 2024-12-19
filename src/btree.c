@@ -192,7 +192,27 @@ do \
 #undef leaf16
 #undef leaf64
 }
-
+#ifdef AVX512F
+int16_t leaf_max(register node_t* node) asm(".btree.leaf.max");
+asm(
+".btree.leaf.max:							\n\t"
+	"MOVDQA XMM0, XMMWORD PTR [RDI]			\n\t"
+	"MOVDQA XMM1, XMMWORD PTR [RDI+16]		\n\t"
+	"PMAXSW XMM0, XMM1						\n\t"
+	"MOVDQA XMM2, XMMWORD PTR [RDI+(2*16)]	\n\t"
+	"MOVDQA XMM3, XMMWORD PTR [RDI+(3*16)]	\n\t"
+	"PMAXSW XMM2, XMM3						\n\t"
+	"PXOR XMM1,XMM1							\n\t"
+	"PCMPEQD XMM3,XMM3						\n\t"
+	"PMAXSW XMM0, XMM2						\n\t"
+	"PMAXSW XMM1, XMM0						\n\t"
+	"PSUBUSW XMM3, XMM1						\n\t"			
+	"PHMINPOSUW XMM5, XMM3					\n\t"
+	"MOVD EAX, XMM5							\n\t"	
+	"NOT AX									\n\t"
+	"RET									\n\t"
+);
+#else			
 static inline int16_t leaf_max(register node_t* node)
 {
 	int16_t max = 0;
@@ -202,7 +222,7 @@ static inline int16_t leaf_max(register node_t* node)
 			max = node->leaf[i]; 
 	return max;
 }
-
+#endif
 static inline void leaf_remove(node_t* node, int16_t i, int16_t c)
 {
 	memmove(node->leaf + i, node->leaf + i + c, (LEAF_NMEMB - (i + c)) * sizeof(int16_t));
@@ -978,7 +998,7 @@ static inline void leaf_split(struct btree* btree, int16_t insert, int16_t delta
 	split->space = space;
 	split->right.max = rmax;
 }
-#ifdef AVX2
+#ifdef AVX512F
 static const int16_t insert[][64] __attribute__((__aligned__(128))) = { 
 {31+32, 0+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,30+32},
 { 0+32,31+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,30+32},
@@ -1013,19 +1033,22 @@ static const int16_t insert[][64] __attribute__((__aligned__(128))) = {
 { 0+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,31+32,30+32},
 { 0+32, 1+32, 2+32, 3+32, 4+32, 5+32, 6+32, 7+32, 8+32, 9+32,10+32,11+32,12+32,13+32,14+32,15+32,16+32,17+32,18+32,19+32,20+32,21+32,22+32,23+32,24+32,25+32,26+32,27+32,28+32,29+32,30+32,31+32},
 };
-static inline void leaf_insert(register node_t* node, int16_t i, int16_t delta)
-{
-	asm volatile(
-		"VMOVDQA64 ZMM0,ZMMWORD PTR [%1]		\n\t"
-		"VPERMT2W ZMM0,ZMM0,ZMMWORD PTR [%0]	\n\t"
-		"VMOVDQA64 ZMMWORD PTR [%0],ZMM0		\n\t"
-	: "+r"((uint64_t)node)
-	: "r"((uint64_t)&insert[i])
-	);
-	node->leaf[i] = delta;
-}
+void permute(register int16_t* leaf, register const int16_t* insert) asm(".btree.permute");
+#define leaf_insert(node, i, delta) \
+do \
+{ \
+	permute(node->leaf, insert[i]); \
+	node->leaf[i] = delta; \
+} while(0)
+asm(
+".btree.permute:							\n\t"
+	"VMOVDQA64 ZMM0,ZMMWORD PTR [RSI]		\n\t"
+	"VPERMT2W ZMM0,ZMM0,ZMMWORD PTR [RDI]	\n\t"
+	"VMOVDQA64 ZMMWORD PTR [RDI],ZMM0		\n\t"
+	"RET									\n\t"
+);
 #else
-static inline void leaf_insert(node_t* node, int16_t i, int16_t delta)
+static inline void leaf_insert(register node_t* node, register int16_t i, register int16_t delta)
 {
 	memmove(node->leaf + i + 1, node->leaf + i, (LEAF_NMEMB - (i + 1)) * sizeof(int16_t));
 	node->leaf[i] = delta;
