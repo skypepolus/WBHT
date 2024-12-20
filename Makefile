@@ -29,7 +29,7 @@
 #
 CC=gcc
 CXX=g++
-CFLAGS=-Iinc -fPIC -O3
+CFLAGS=-Iinc -fPIC -g -O1
 WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
 BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc
 AR=ar
