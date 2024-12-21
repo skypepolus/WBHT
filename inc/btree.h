@@ -98,7 +98,7 @@ struct btree
 
 WEAK void btree_free(struct btree* btree, int16_t disp) PRIVATE(btree_free);
 WEAK size_t btree_realloc(struct btree* btree, int16_t disp, int16_t delta) PRIVATE(btree_realloc);
-WEAK size_t btree_shrink(struct btree* btree, int16_t disp, int16_t delta) PRIVATE(btree_reverse_realloc);
+WEAK size_t btree_shrink(struct btree* btree, int16_t disp, int16_t delta) PRIVATE(btree_shrink);
 WEAK void* btree_page(struct thread* thread, size_t alignment, size_t size) PRIVATE(btree_page);
 WEAK void* first_fit_alloc(struct btree* btree, int16_t dela) PRIVATE(first_fit_alloc);
 WEAK struct thread* last_free(struct btree* btree) PRIVATE(last_free);

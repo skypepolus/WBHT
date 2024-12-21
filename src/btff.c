@@ -42,7 +42,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include "static.h"
 
-static unsigned _thread_local(struct thread* thread)
+static inline unsigned _thread_local(struct thread* thread)
 {
 	struct btree* btree = thread->local;
 	void** free;
@@ -72,12 +72,25 @@ static unsigned _thread_local(struct thread* thread)
 	return 0;
 }
 
-static void _thread_remote(struct thread* thread)
+static inline void _thread_remote(struct thread* thread)
 {
 	struct btree* btree = thread->remote;
 	__atomic_thread_fence(__ATOMIC_ACQUIRE);
 	if(__sync_bool_compare_and_swap(&thread->remote, btree, btree_next))
+	{
 		thread->local = btree;
+		if(thread->btree != thread->local)
+		{
+			if(thread->btree)
+			{
+				btree = thread->btree;
+				thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+			}
+			btree = thread->local;
+			thread->root = heap_remove(thread->root, &btree->heap);
+			thread->btree = btree;
+		}
+	}
 }
 
 static void destructor(register void* data)
@@ -149,7 +162,7 @@ static void destructor(register void* data)
 	}
 }
 
-static void _remote_free(struct thread* thread, struct btree* btree, void* ptr)
+static inline void _remote_free(struct thread* thread, struct btree* btree, void* ptr)
 {
 	do
 	{
@@ -173,7 +186,7 @@ static void _remote_free(struct thread* thread, struct btree* btree, void* ptr)
 	} while(0 == sched_yield());
 }
 
-static void* btff_mmap(struct thread* thread, size_t alignment, size_t size)
+static inline void* btff_mmap(struct thread* thread, size_t alignment, size_t size)
 {
 	size_t btree_alignment = alignment;
 
@@ -361,11 +374,15 @@ WEAK void btff_free(void* ptr)
 	struct btree* btree;
 	int16_t disp;
 	void** free;
-	if((uint64_t)(sizeof(void*) - 1) & (uint64_t)ptr)
+	if(unlikely(NULL == ptr))
+		return;
+	else
+	if(unlikely((uint64_t)(sizeof(void*) - 1) & (uint64_t)ptr))
 	{
 		BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
 		return;
 	}
+	else
 	if((thread = local))
 	{
 		unsigned destruct = 0;
@@ -503,7 +520,6 @@ WEAK void btff_free(void* ptr)
 			destructor(&local);
 	}
 	else
-	if((ptr))
 	{
 		struct thread* remote;
 		btree = BTREE(ptr);
@@ -569,13 +585,158 @@ WEAK void* btff_realloc(void *ptr, size_t size)
 				_thread_remote(thread);
 
 			btree = BTREE(ptr);
-			if((uint64_t*)ptr < &btree->payload[btree_left]) 
-			{
-				BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
-				return NULL;
-			}
 			if(btree->thread == thread)
 			{
+				if((uint64_t*)ptr < &btree->payload[btree_left]) 
+				{
+					BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+					return NULL;
+				}
+				if(BTREE_LIMIT < size)
+				{
+					if(dst = btff_mmap(thread, sizeof(void*), size))
+					{
+						if(size < (n = (uint64_t)btree->barrier - (uint64_t)ptr))
+							n = size;
+						memcpy(dst, ptr, n);
+						if(btree_left == (disp = (uint64_t*)ptr - btree->payload))
+							last_free(btree);
+						else
+							btree_free(btree, disp);
+						return dst;
+					}
+					else
+						return NULL;
+				}
+				else
+				{
+					disp = (uint64_t*)ptr - btree->payload;
+					delta = (size + sizeof(void*) - 1) >> 3;
+					BTFF_ASSERT(size <= ((size_t)delta) << 3);
+					if(0 == (n = btree_realloc(btree, disp, delta)))
+					#ifndef __OPTIMIZE__
+						return memset(ptr, 0, size);
+					#else
+						return ptr;
+					#endif
+					else
+					{
+						if((dst = btff_alloc(thread, size, delta)))
+						{
+							if(size < n)
+								n = size;
+							memcpy(dst, ptr, n);
+							if(btree_left == (disp = (uint64_t*)ptr - btree->payload))
+								last_free(btree);
+							else
+								btree_free(btree, disp);
+							return dst;
+						}
+						else
+							return NULL;
+					}
+				}
+			}
+			else
+			if((btree->thread))
+			{
+				if(size < (n = (uint64_t)btree->barrier - (uint64_t)ptr))
+					n = size;
+				if(BTREE_LIMIT < size)
+				{
+					if((dst = btff_mmap(thread, sizeof(void*), size)))
+					{
+						memcpy(dst, ptr, n);
+						if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+							BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+						else
+							_remote_free(btree->thread, btree, ptr);
+						return dst;
+					}
+				}
+				else
+				{
+					delta = (size + sizeof(void*) - 1) >> 3;
+					if((dst = btff_alloc(thread, size, delta)))
+					{
+						memcpy(dst, ptr, size);
+						if((size_t)ptr < (size_t)&btree->payload[btree_left]) 
+							BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+						else
+							_remote_free(btree->thread, btree, ptr);
+						return dst;
+					}
+				}
+			}
+			else
+			{
+				if(size < (n = (uint64_t)btree + (uint64_t)btree_length - (uint64_t)ptr))
+					n = size;
+				if(BTREE_LIMIT < size)
+				{
+					if((dst = btff_mmap(thread, sizeof(void*), size)))
+					{
+						memcpy(dst, ptr, n);
+						BTFF_ASSERT(0 == munmap(btree, btree_length));
+						return dst;
+					}
+				}
+				else
+				{
+					delta = (size + sizeof(void*) - 1) >> 3;
+					if((dst = btff_alloc(thread, size, delta)))
+					{	
+						memcpy(dst, ptr, n);
+						BTFF_ASSERT(0 == munmap(btree, btree_length));
+						return dst;
+					}
+				}
+			}
+		}
+		else	
+			btff_free(ptr);
+	}
+	else
+	if(0 < size)
+		return btff_malloc(size);
+	return NULL;
+}
+
+WEAK void* btff_reallocf(void *ptr, size_t size)
+{
+	if((ptr))
+	{
+		if((uint64_t)(sizeof(void*) - 1) & (uint64_t)ptr)
+		{
+			BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+			errno = ENOMEM;
+			return NULL;
+		}
+		else
+		if(0 < size)
+		{
+			struct thread* thread = (local) ? local : thread_initial(&local);
+			struct btree* btree;
+			int16_t disp;
+			void* dst;
+			size_t n;
+			int16_t delta;
+			uint64_t* queue;
+
+			if(unlikely(thread->local))
+				_thread_local(thread);
+			else
+			if(unlikely(thread->remote))
+				_thread_remote(thread);
+
+			btree = BTREE(ptr);
+			if(btree->thread == thread)
+			{
+				if((uint64_t*)ptr < &btree->payload[btree_left]) 
+				{
+					BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+					return NULL;
+				}
 				if(BTREE_LIMIT < size)
 				{
 					if(dst = btff_mmap(thread, sizeof(void*), size))
@@ -665,6 +826,146 @@ WEAK void* btff_realloc(void *ptr, size_t size)
 	if(0 < size)
 		return btff_malloc(size);
 	return NULL;
+
 }
 
-#include "weak.h"
+WEAK void *btff_reallocarray(void *ptr, size_t nmemb, size_t size)
+{
+	if(64 == sizeof(void*))
+	{
+		if(size >= (1UL << 48) / nmemb)
+		{
+			errno = EINVAL;
+			return NULL;
+		}
+	}
+	else
+	if(32 == sizeof(void*))
+	{
+		if(size >= (1UL << 31) / nmemb)
+		{
+			errno = EINVAL;
+			return NULL;
+		}
+	}
+	return btff_realloc(ptr, nmemb * size);
+}
+
+WEAK void* btff_aligned_alloc(size_t alignment, size_t size)
+{
+	void* memptr;
+	int ret;
+	switch(ret == btff_posix_memalign(&memptr, alignment, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return NULL;
+}
+
+WEAK int btff_posix_memalign(void **memptr, size_t alignment, size_t size)
+{
+	int ret = 0;
+	if(0 == size)
+		*memptr = NULL;
+	else
+	if(sizeof(void*) > alignment)
+		ret = EINVAL;
+	else
+	if((alignment & (alignment - 1)))
+		ret = EINVAL;
+	else
+	{
+		struct thread* thread =	 (local) ? local : thread_initial(&local);
+		if(BTREE_LIMIT < size)
+		{
+			void* ptr = btff_mmap(thread, alignment, size);
+			if((ptr))
+				*memptr = ptr;
+			else
+				ret = ENOMEM;
+		}
+		else
+		if(BTREE_LIMIT < alignment + size)
+		{
+			void* ptr = btree_page(thread, alignment, size);
+			if((ptr))
+				*memptr = ptr;
+			else
+				ret = ENOMEM;
+		}
+		else
+		{
+			int16_t delta = (alignment + size + sizeof(void*) - 1) >> 3;
+			size_t addr;
+			if((addr = (size_t)btff_alloc(thread, alignment + size, delta)))
+			{
+				void* ptr = (void*)(addr + alignment - 1 & ~(alignment - 1));
+				int16_t disp;
+				struct btree* btree = thread->btree;
+				if((size_t)ptr < addr)
+				{
+					delta -= ((size_t)ptr - addr) >> 3;
+					disp = (uint64_t*)addr - btree->payload;
+					BTFF_ASSERT(0 == btree_shrink(btree, disp, delta));
+				}
+				disp = (uint64_t*)ptr - btree->payload;
+				delta = (size + sizeof(void*) - 1) >> 3;
+				BTFF_ASSERT(0 == btree_realloc(btree, disp, delta));
+				*memptr = ptr;
+			}
+			else
+				ret = ENOMEM;
+		}
+	}
+	return ret;
+}
+
+WEAK void* btff_valloc(size_t size)
+{
+	void* memptr;
+	int ret;
+	switch(ret == btff_posix_memalign(&memptr, PAGE_SIZE, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return NULL;
+}
+
+WEAK void* btff_memalign(size_t alignment, size_t size)
+{
+	void* memptr;
+	int ret;
+	switch(ret == btff_posix_memalign(&memptr, alignment, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return NULL;
+}
+
+WEAK void* btff_pvalloc(size_t alignment, size_t size)
+{
+	void* memptr;
+	int ret;
+	switch(ret == btff_posix_memalign(&memptr, alignment, size + PAGE_SIZE - 1 & PAGE_MASK))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return NULL;
+}
+

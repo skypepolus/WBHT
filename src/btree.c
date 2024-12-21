@@ -998,31 +998,13 @@ static inline void leaf_split(struct btree* btree, int16_t insert, int16_t delta
 	split->space = space;
 	split->right.max = rmax;
 }
-#ifdef AVX512F
-void leaf_insert(register node_t* node, register int16_t i, register int16_t delta) asm(".btree.leaf_insert");
-asm(
-".btree.leaf_insert:						\n\t"
-	"MOV RCX,32								\n\t"
-	"SUB CX,SI								\n\t"
-	"LEA RDI,[RDI+RSI*2]                    \n\t"
-".btree.leaf_insert.loop:					\n\t"
-	"MOV AX,[RDI]							\n\t"	
-	"MOV [RDI],DX							\n\t"
-	"TEST AX,AX								\n\t"
-	"JZ .btree.leaf_insert.return			\n\t"
-	"MOV DX,AX								\n\t"
-	"ADD RDI,2								\n\t"
-	"LOOP .btree.leaf_insert.loop			\n"
-".btree.leaf_insert.return:					\n\t"
-	"RET									\n"
-);
-#else
+
 static inline void leaf_insert(register node_t* node, register int16_t i, register int16_t delta)
 {
 	memmove(node->leaf + i + 1, node->leaf + i, (LEAF_NMEMB - (i + 1)) * sizeof(int16_t));
 	node->leaf[i] = delta;
 }
-#endif
+
 static inline void node_split(struct btree* btree, node_t* node, struct split* split)
 {
 	int16_t l;
@@ -1620,8 +1602,173 @@ WEAK void* btree_page(struct thread* thread, size_t alignment, size_t size)
 /* return 0 in case of success, otherwise the old size */
 WEAK size_t btree_shrink(struct btree* btree, int16_t disp, int16_t delta)
 {
-	/* TODO */
-	return 0;
+	size_t size = 0;
+	int16_t h, n, tmp;
+	node_t* node;
+	node_t* left;
+
+	if(btree_node_count < btree_root + 2) 
+	{ 
+		if((btree_node_free)) 
+			btree_node_free = splay_last(btree_node_free); 
+		do 
+		{ 
+			if((node = top_alloc(btree))) 
+			{ 
+				node->left[0] = btree_node_free; 
+				node->right[0] = NULL; 
+				btree_node_free = node; 
+				btree_node_count++; 
+			} 
+			else 
+			{ 
+				errno = ENOMEM; 
+				return (uint64_t*)btree->barrier - &btree->payload[disp];
+			} 
+		} while(btree_node_count < btree_root + 2); 
+	} 
+
+	switch((int)(h = btree_search(btree, disp)))
+	{
+	case -1:
+		BTFF_PRINTF(stderr, "*** btff detected *** : double free or corruption : %p *** %s %d\n", btree->payload + disp, __FILE__, __LINE__);
+#ifndef __OPTIMIZE__
+		btree_sanity(btree);
+#endif
+		break;
+	case 0: /* leaf */
+		node = &btree->node[btree_stack(0, NODE)];
+		n = btree_stack(0, BRANCH);
+		if(unlikely(0 <= node->leaf[n]))
+		{
+			BTFF_PRINTF(stderr, "%p corruption %s %d\n", &btree->payload[disp], __FILE__, __LINE__);
+			return btree->barrier - (uint8_t*)&btree->payload[disp];
+		}
+		delta += node->leaf[n];
+		if(0 < delta) /* not allowed to increase the object */
+		{
+			size = -1 * node->leaf[n];
+			size *= sizeof(void*);
+		}
+		else
+		if(0 > delta) /* decrease the object */
+		{
+			delta *= -1;
+			if(unlikely(0 == n))
+			{
+				if(unlikely(node->leaf[0] == btree_left))
+				{
+					btree_left += delta;
+					leaf_decrease(btree, node->leaf[0] + delta, btree_root);
+				}
+				else
+				{
+					int16_t l;
+					h = leaf_previous(btree);
+					left = &btree->node[btree_stack(h, NODE)];
+					l = btree_stack(h, BRANCH) - 1;
+					if(0 < left->space[l])
+					{
+						node->leaf[n] += delta;
+						left->space[l] += delta;
+						btree_stack(h, BRANCH) = l;
+						btree_increase(btree, h, btree_root);
+					}
+					else
+					if(0 > left->space[l])
+					{
+						tmp = node->leaf[0] + delta;
+						node->leaf[0] = delta;
+						btree_increase(btree, 0, btree_root);
+						if(likely(0 == node->leaf[LEAF_NMEMB - 1]))
+							leaf_insert(node, 1, tmp);
+						else
+							btree_split(btree, 1, tmp, btree_root);
+					}
+					else
+						BTFF_ASSERT((left->space[l]));	
+				}
+			}
+			else
+			if(0 < node->leaf[n - 1])
+			{
+				node->leaf[n] += delta;
+				node->leaf[n - 1] += delta;
+				btree_stack(0, BRANCH) = n - 1;
+				btree_increase(btree, 0, btree_root);
+			}
+			else
+			if(0 > node->leaf[n - 1])
+			{
+				tmp = node->leaf[n] + delta;
+				node->leaf[n] = delta;
+				btree_increase(btree, 0, btree_root);
+				if(likely(0 == node->leaf[LEAF_NMEMB - 1]))
+					leaf_insert(node, n + 1, tmp);
+				else
+					btree_split(btree, n + 1, tmp, btree_root);
+			}
+			else
+				BTFF_ASSERT((node->leaf[n - 1]));	
+		}
+		break;
+	default: /* node */
+		node = &btree->node[btree_stack(h, NODE)];
+		n = btree_stack(h, BRANCH);
+		if(unlikely(0 <= node->space[n]))
+		{
+			BTFF_PRINTF(stderr, "%p corruption %s %d\n", &btree->payload[disp], __FILE__, __LINE__);
+			return btree->barrier - (uint8_t*)&btree->payload[disp];
+		}
+		delta += node->space[n];
+		if(0 < delta) /* not allowed to increase the object */
+		{
+			size = -1 * node->leaf[n];
+			size *= sizeof(void*);
+		}
+		else
+		if(0 > delta) /* decrease the object */
+		{
+			int16_t l;
+			delta *= -1;
+			node_previous(btree, h);
+			left = &btree->node[btree_stack(0, NODE)];
+			l = leaf_nmemb(left) - 1;
+			if(0 < left->leaf[l])
+			{
+				node->space[n] += delta;
+				node->child[n] += delta;
+				left->leaf[l] += delta;
+				btree_increase(btree, 0, btree_root);
+			}
+			else
+			if(0 > left->leaf[l])
+			{
+				node->space[n] += delta;
+				node->child[n] += delta;
+				if(l < LEAF_NMEMB - 1)
+				{
+					left->leaf[l + 1] = delta;
+					btree_stack(0, BRANCH) = l + 1;
+					btree_increase(btree, 0, btree_root);
+				}
+				else
+				{
+					tmp = left->leaf[l];
+					left->leaf[l] = delta;
+					btree_increase(btree, 0, btree_root);
+					btree_split(btree, l + 1, tmp, btree_root);
+				}
+			}
+			else
+				BTFF_ASSERT((left->leaf[l]));
+		}
+		break;
+	}
+#ifndef __OPTIMIZE__
+	btree_sanity(btree);
+#endif
+	return size; /* 0 in case of success, otherwise the old size */
 }
 
 /* return 0 in case of success, otherwise the old size */

@@ -107,5 +107,19 @@ void* btff_calloc(size_t count, size_t size)
 	PRIVATE(btff_calloc);
 void* btff_realloc(void *ptr, size_t size)
 	PRIVATE(btff_realloc);
+void* btff_reallocf(void *ptr, size_t size)
+	PRIVATE(btff_reallocf);
+void *btff_reallocarray(void *ptr, size_t nmemb, size_t size)
+	PRIVATE(btff_reallocarray);
+void* btff_aligned_alloc(size_t alignment, size_t size)
+	PRIVATE(btff_aligned_alloc);
+int btff_posix_memalign(void **memptr, size_t alignment, size_t size)
+	PRIVATE(btff_posix_memalign);
+void* btff_valloc(size_t size)
+	PRIVATE(btff_valloc);
+void* btff_memalign(size_t alignment, size_t size)
+	PRIVATE(btff_memalign);
+void* btff_pvalloc(size_t alignment, size_t size)
+	PRIVATE(btff_pvalloc);
 
 #endif/*__btff_h__*/
