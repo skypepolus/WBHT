@@ -164,6 +164,9 @@ static void destructor(register void* data)
 
 static inline void _remote_free(struct thread* thread, struct btree* btree, void* ptr)
 {
+	if(ptr == btree_remote)
+		BTFF_PRINTF(stderr, "%p corruption %s %d\n", ptr, __FILE__, __LINE__);
+	else
 	do
 	{
 		void** free = (void**)ptr;

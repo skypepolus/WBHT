@@ -515,7 +515,7 @@ static void* wbht_map(size_t alignment, size_t size)
 	uint64_t length;
 	uint64_t align = WBHT_ALIGN < alignment ? alignment : WBHT_ALIGN;
 	uint64_t page;
-	void* ptr;
+	int64_t* front; 
 
 	length = PAGE_SIZE + size + align - 1;
 	length += PAGE_SIZE - 1;
@@ -540,7 +540,8 @@ static void* wbht_map(size_t alignment, size_t size)
 	addr = (size_t)(((struct page*)page)->front + 1);
 	addr += alignment - 1;
 	addr &= ~(alignment - 1);
-	ptr = (void*)addr;
+	front = (void*)addr;
+	front--;
 
 	addr += size;
 	addr += PAGE_SIZE - 1;
@@ -560,9 +561,11 @@ static void* wbht_map(size_t alignment, size_t size)
 		errno = ENOMEM;
 		return NULL;
 	}
-	((int64_t*)ptr)[-1] = -1 * (int64_t)((page + size - (uint64_t)ptr - sizeof(int64_t)) / sizeof(int64_t));
-	*((struct page*)page)->front = -1 * (int64_t)((length - sizeof(struct thread*)) / sizeof(int64_t));
-	return ptr;
+	*front = (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(int64_t);
+	*front *= -1;
+	*((struct page*)page)->front = (addr - (size_t)((struct page*)page)->front) / sizeof(int64_t);
+	*((struct page*)page)->front *= -1;
+	return front + 1;
 }
 
 WEAK void* wbht_malloc(size_t size)
@@ -882,7 +885,7 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 				{
 					if(dst = wbht_map(sizeof(void*), size))
 					{
-						n = -1 * *front * sizeof(void*);
+						n = (-1 * *front - 2) * sizeof(void*);
 						if(n > size)
 							n = size;
 						memcpy(dst, ptr, n);
@@ -900,7 +903,7 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 					{
 						if(dst = local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 						{
-							n = -1 * *front * sizeof(void*);
+							n = (-1 * *front - 2) * sizeof(void*);
 							if(n > size)
 								n = size;
 							memcpy(dst, ptr, n);
@@ -917,7 +920,7 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 			{
 				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
@@ -931,7 +934,7 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 			{
 				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
@@ -1000,7 +1003,7 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 				{
 					if(dst = wbht_map(sizeof(void*), size))
 					{
-						n = -1 * *front * sizeof(void*);
+						n = (-1 * *front - 2) * sizeof(void*);
 						if(n > size)
 							n = size;
 						memcpy(dst, ptr, n);
@@ -1021,7 +1024,7 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 					{
 						if(dst = local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 						{
-							n = -1 * *front * sizeof(void*);
+							n = (-1 * *front - 2) * sizeof(void*);
 							if(n > size)
 								n = size;
 							memcpy(dst, ptr, n);
@@ -1041,7 +1044,7 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 			{
 				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
@@ -1058,7 +1061,7 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 			{
 				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
