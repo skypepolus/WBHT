@@ -234,7 +234,7 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 	else
 		*front = *back;
 RETURN:
-	if(PAGE_SIZE * 2 >> 3 + 2 <= *front)
+	if((sizeof(struct heap) + PAGE_SIZE * 2 >> 3) <= *front)
 	{	
 		if(0 == front[-1] && 0 == back[1])
 		{
@@ -245,16 +245,18 @@ RETURN:
 				WBHT_ASSERT(0 == munmap((void*)(front - 2), WBHT_LENGTH));
 				thread->reference--;
 			}
+			return;
 		}
 		else
 		{
-			void* addr = (void*)((size_t)&front[1] + PAGE_SIZE - 1 & PAGE_MASK);
+			void* addr = (void*)((size_t)front + sizeof(struct heap) + PAGE_SIZE - 1 & PAGE_MASK);
 			if((*(uint64_t*)addr))
 			{
-				size_t length = (*front - 2) << 3;
-				if(front + 1 < (int64_t*)addr)
-					length -= (size_t)addr - (size_t)&front[1];
-				WBHT_ASSERT(MAP_FAILED != mmap(addr, length & PAGE_MASK, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)); 	
+				size_t length = (*front - 2) * sizeof(void*) - ((size_t)addr - (size_t)&front[1]);
+				WBHT_ASSERT(front < (int64_t*)addr);
+				WBHT_ASSERT((size_t)addr + (length & PAGE_MASK) <= (size_t)(front + *front - 1));
+				if(PAGE_SIZE <= length)
+					WBHT_ASSERT(MAP_FAILED != mmap(addr, length & PAGE_MASK, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)); 	
 			}
 		}
 	}
@@ -902,7 +904,7 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 							if(n > size)
 								n = size;
 							memcpy(dst, ptr, n);
-							remote_free(page->thread, ptr);
+							local_free(thread, front, back);
 							return dst;
 						}
 						else
@@ -1023,12 +1025,12 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 							if(n > size)
 								n = size;
 							memcpy(dst, ptr, n);
-							remote_free(page->thread, ptr);
+							local_free(thread, front, back);
 							return dst;
 						}
 						else
 						{
-							remote_free(page->thread, ptr);
+							local_free(thread, front, back);
 							return NULL;
 						}
 					}
@@ -1237,5 +1239,4 @@ WEAK void* wbht_pvalloc(size_t alignment, size_t size)
 	}
 	return NULL;
 }
-
 

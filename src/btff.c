@@ -906,7 +906,7 @@ WEAK int btff_posix_memalign(void **memptr, size_t alignment, size_t size)
 				void* ptr = (void*)(addr + alignment - 1 & ~(alignment - 1));
 				int16_t disp;
 				struct btree* btree = thread->btree;
-				if((size_t)ptr < addr)
+				if(addr < (size_t)ptr)
 				{
 					delta -= ((size_t)ptr - addr) >> 3;
 					disp = (uint64_t*)addr - btree->payload;

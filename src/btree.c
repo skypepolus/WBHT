@@ -1457,29 +1457,6 @@ WEAK void btree_free(struct btree* btree, int16_t disp)
 		if(unlikely(0 == node->leaf[LEAF_HALF - 1]))
 			btree_rebalance(btree, 0, btree_root);
 		break;
-/*	case 1:
-		node = &btree->node[btree_stack(1, NODE)];
-		n = btree_stack(1, BRANCH);
-		right = &btree->node[node->child[n + 1]];
-		if(0 < right->leaf[0])
-		{
-			node->space[n] += right->leaf[0]; btree_stack(1, BRANCH) = n + 1;
-			btree_stack(0, BRANCH) = 0; leaf_decrease(btree, INT16_MIN, 1);
-			leaf_remove(right, 0, 1);
-		}
-		left = &btree->node[node->child[n - 1]];
-		l = leaf_nmemb(left) - 1;
-		if(0 < left->leaf[l])
-		{
-			node->child[n] -= left->leaf[l];
-			node->space[n] += left->leaf[l]; btree_stack(1, BRANCH) = n - 1;
-			btree_stack(0, BRANCH) = l; leaf_decrease(btree, 0, 1);
-		}
-		node->space[n] *= -1; btree_stack(1, BRANCH) = n;
-		btree_increase(btree, 1, btree_root);
-		if(unlikely(0 == node->leaf[LEAF_HALF - 1]))
-			btree_rebalance(btree, 0, btree_root);
-		break; */
 	default:
 		node = &btree->node[btree_stack(h, NODE)];
 		n = btree_stack(h, BRANCH);

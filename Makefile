@@ -27,7 +27,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-CFLAGS=-Iinc -fPIC -g -O1
+CFLAGS=-Iinc -fPIC -O3
 WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc,--defsym=reallocf=.wbht.private.wbht_reallocf,--defsym=reallocarray=.wbht.private.wbht_reallocarray,--defsym=aligned_alloc=.wbht.private.wbht_aligned_alloc,--defsym=posix_memalign=.wbht.private.wbht_posix_memalign,--defsym=valloc=.wbht.private.wbht_valloc,--defsym=memalign=.wbht.private.wbht_memalign,--defsym=pvalloc=.wbht.private.wbht_pvalloc
 BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc,--defsym=reallocf=.wbht.private.btff_reallocf,--defsym=reallocarray=.wbht.private.btff_reallocarray,--defsym=aligned_alloc=.wbht.private.btff_aligned_alloc,--defsym=posix_memalign=.wbht.private.btff_posix_memalign,--defsym=valloc=.wbht.private.btff_valloc,--defsym=memalign=.wbht.private.btff_memalign,--defsym=pvalloc=.wbht.private.btff_pvalloc
 
