@@ -80,6 +80,7 @@ static inline struct thread* thread_initial(struct thread** local)
 #ifndef __btff_h__
 	for(r = 0; r < sizeof(thread->list) / sizeof(*thread->list); r++)
 		list_initial(thread->list + r);
+	thread->remote = MAP_FAILED;
 #endif
 	*local = thread;
 	pthread_setspecific(key, (const void*)local);

@@ -90,7 +90,7 @@ static void destructor(register void* data)
 			int64_t* back;
 			void** free;
 			*local = NULL;
-			for(;;)
+			while(MAP_FAILED != thread->remote)
 			{
 				if((thread->free))
 				{
@@ -132,6 +132,7 @@ static void destructor(register void* data)
 						break;
 				}
 				else
+				if(!__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
 					break;
 			}
 			if(0 == thread->reference)
@@ -735,6 +736,9 @@ WEAK void* wbht_malloc(size_t size)
 		struct page* page;
 		size += sizeof(__int128) - 1;
 		size &= ~(sizeof(__int128) - 1);
+		if(MAP_FAILED == thread->remote)
+			;
+		else
 		if(unlikely(free = thread->free))
 		{
 			int64_t* front; 
@@ -796,6 +800,8 @@ WEAK void* wbht_malloc(size_t size)
 				local = thread = remote;
 			}
 		}
+		else
+			__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
 		if(WBHT_LIMIT < size)
 			return wbht_map(sizeof(__int128), size);
 		else
@@ -849,9 +855,10 @@ static inline void remote_free(struct thread* thread, struct page* page, void* p
 			&& __sync_bool_compare_and_swap(&page->next, MAP_FAILED, NULL))
 				do
 				{
-					page->next = thread->remote;
+					struct page* remote = thread->remote;
+					page->next = MAP_FAILED == remote ? NULL : remote;
 					__atomic_thread_fence(__ATOMIC_RELEASE);
-					if(__sync_bool_compare_and_swap(&thread->remote, page->next, page))
+					if(__sync_bool_compare_and_swap(&thread->remote, remote, page))
 						return;
 				} while(0 == sched_yield());
 			else
@@ -872,6 +879,38 @@ WEAK void wbht_free(void* ptr)
 		void** free;
 		if((thread = local))
 		{
+			if(MAP_FAILED == thread->remote)
+			{
+				page = WBHT_PAGE(ptr);
+				remote = page->thread;
+				front = ((int64_t*)ptr) - 1;
+				if(remote == thread)
+				{
+					if((back = boundary(front, __FILE__, __LINE__)))
+						local_free(thread, front, back);
+				}
+				else
+				if((remote))
+				{
+					if((back = boundary(front, __FILE__, __LINE__)))
+						remote_free(remote, page, ptr);
+					if((remote = channel->thread) && ((remote->local) || (remote->remote)))
+					{
+						__atomic_thread_fence(__ATOMIC_ACQUIRE);
+						if(__sync_bool_compare_and_swap(&channel->thread, remote, remote->next))
+						{
+							destructor(&local);
+							local = remote;
+						}
+					}
+				}
+				else
+				{
+					WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+					WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
+				}
+			}
+			else
 			if(unlikely(thread->free))
 			{
 				free = thread->free;
@@ -977,36 +1016,7 @@ WEAK void wbht_free(void* ptr)
 				}
 			}
 			else
-			{
-				page = WBHT_PAGE(ptr);
-				remote = page->thread;
-				front = ((int64_t*)ptr) - 1;
-				if(remote == thread)
-				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						local_free(thread, front, back);
-				}
-				else
-				if((remote))
-				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						remote_free(remote, page, ptr);
-					if((remote = channel->thread) && ((remote->local) || (remote->remote)))
-					{
-						__atomic_thread_fence(__ATOMIC_ACQUIRE);
-						if(__sync_bool_compare_and_swap(&channel->thread, remote, remote->next))
-						{
-							destructor(&local);
-							local = remote;
-						}
-					}
-				}
-				else
-				{
-					WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
-				}
-			}
+				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
 		}
 		else
 		{
@@ -1050,6 +1060,10 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 			int64_t* front; 
 			int64_t* back;
 			void** free;
+
+			if(MAP_FAILED == thread->remote)
+				;
+			else
 			if(unlikely(thread->free))
 			{
 				int64_t* front; 
@@ -1087,6 +1101,9 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 				if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
 					thread->local = page;
 			}
+			else
+				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+
 			page = WBHT_PAGE(ptr);
 			size += sizeof(__int128) - 1;
 			size &= ~(sizeof(__int128) - 1);
@@ -1181,6 +1198,10 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 			int64_t* front; 
 			int64_t* back;
 			void** free;
+	
+			if(MAP_FAILED == thread->remote)
+				;
+			else
 			if(unlikely(thread->free))
 			{
 				int64_t* front; 
@@ -1218,6 +1239,9 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 				if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
 					thread->local = page;
 			}
+			else
+				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+
 			page = WBHT_PAGE(ptr);
 			size += sizeof(__int128) - 1;
 			size &= ~(sizeof(__int128) - 1);
