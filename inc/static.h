@@ -77,6 +77,10 @@ static inline struct thread* thread_initial(struct thread** local)
 	} while((thread) && 0 == sched_yield());
 
 	assert(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
+#ifndef __btff_h__
+	for(r = 0; r < sizeof(thread->list) / sizeof(*thread->list); r++)
+		list_initial(thread->list + r);
+#endif
 	*local = thread;
 	pthread_setspecific(key, (const void*)local);
 	return thread;
