@@ -52,11 +52,11 @@ lib/libbtff.a: src/btff.o src/btree.o
 lib/libbtff-avx512f.a: src/btff-avx512f.o src/btree-avx512f.o
 	$(AR) rs $@ $?
 
-.PHONY: 
+.PHONY: test
 test: lib
 	make -C test
 
-.PHONY: 
+.PHONY: bench
 bench: lib
 	make -C bench
 
@@ -74,8 +74,6 @@ clean:
 .PHONY: dep
 dep:
 	$(CC) $(CFLAGS) -M src/*.c > .dep
-	make -C test dep
-	make -C bench dep
 
 ifeq (1, $(shell if [ -e .dep ]; then echo 1; fi))
 include .dep

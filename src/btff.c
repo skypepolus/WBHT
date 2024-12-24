@@ -139,14 +139,10 @@ static void destructor(register void* data)
 			{
 				do
 				{
-					register unsigned i, j;
-					for(i = 0, j = thread->polling, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
-					{
-						thread->next = (struct thread*)channel[j].thread;
-						__atomic_thread_fence(__ATOMIC_RELEASE);
-						if(__sync_bool_compare_and_swap(&channel[j].thread, thread->next, thread))
-							return;
-					}
+					thread->next = (struct thread*)channel->thread;
+					__atomic_thread_fence(__ATOMIC_RELEASE);
+					if(__sync_bool_compare_and_swap(&channel->thread, thread->next, thread))
+						return;
 				} while(0 == sched_yield());
 				BTFF_ASSERT(NULL == thread);
 			}
@@ -498,8 +494,7 @@ WEAK void btff_free(void* ptr)
 					return;
 				}
 				_remote_free(remote, btree, ptr);
-				i = thread->polling % nprocs;
-				if((remote = channel[i].thread) && ((remote->local) || (remote->remote)))
+				if((remote = channel->thread) && ((remote->local) || (remote->remote)))
 				{
 					__atomic_thread_fence(__ATOMIC_ACQUIRE);
 					if(__sync_bool_compare_and_swap(&channel[i].thread, remote, remote->next))
@@ -509,8 +504,6 @@ WEAK void btff_free(void* ptr)
 						return;
 					}
 				}
-				else
-					thread->polling++;
 			}
 			else
 			{
@@ -536,11 +529,10 @@ WEAK void btff_free(void* ptr)
 				return;
 			}
 			_remote_free(remote, btree, ptr);
-			i = polling % nprocs;
-			if((remote = channel[i].thread) && ((remote->local) || (remote->remote)))
+			if((remote = channel->thread) && ((remote->local) || (remote->remote)))
 			{
 				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				if(__sync_bool_compare_and_swap(&channel[i].thread, remote, remote->next))
+				if(__sync_bool_compare_and_swap(&channel->thread, remote, remote->next))
 				{
 					if(NULL == pthread_getspecific(key))
 						pthread_setspecific(key, (const void*)&local);
@@ -548,8 +540,6 @@ WEAK void btff_free(void* ptr)
 					return; 
 				}
 			}
-			else
-				polling++;
 		}
 		else
 		{

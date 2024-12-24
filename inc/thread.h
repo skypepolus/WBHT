@@ -33,6 +33,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "private.h"
 #include "heap.h"
+#include "list.h"
 #ifdef __btff_h__
 struct btree;
 #endif
@@ -40,7 +41,6 @@ struct thread
 {
 	struct thread* next;
 	struct heap* root;
-	unsigned polling;
 #ifdef __btff_h__
 	size_t addr;
 	size_t length;
@@ -51,6 +51,10 @@ struct thread
 #else
 	void** free;
 	int reference;
+	struct page* local;
+	struct list list[sizeof(struct heap) / 16];
+	uint64_t barrier[sizeof(void*) * 15];
+	struct page* remote;
 	struct
 	{
 		uint8_t barrier[sizeof(void*) * 15];

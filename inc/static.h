@@ -11,14 +11,7 @@ static unsigned nprocs = 0;
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 static pthread_key_t key;
 static size_t thread_length;
-
-static uint8_t barrier0[sizeof(void*) * 15];
-static unsigned polling;
-static uint8_t barrier1[sizeof(void*) * 15];
-static unsigned scan;
-static uint8_t barrier2[sizeof(void*) * 15];
-static unsigned dial;
-static uint8_t barrier3[sizeof(void*) * 15];
+static uint8_t barrier[sizeof(void*) * 15];
 
 static void destructor(register void* data);
 
@@ -70,27 +63,18 @@ static inline struct thread* thread_initial(struct thread** local)
 		assert(0 == pthread_once(&once_control, init_routine));
 	do
 	{
-		register unsigned i, j;
-		r = 0;
-		for(i = 0, j = dial, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
+		if(thread = (struct thread*)channel->thread)
 		{
-			if(thread = (struct thread*)channel[j].thread)
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
+			if(__sync_bool_compare_and_swap(&channel->thread, thread, thread->next))
 			{
-				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				if(__sync_bool_compare_and_swap(&channel[j].thread, thread, thread->next))
-				{
-					*local = thread;
-					if(NULL == pthread_getspecific(key))
-						pthread_setspecific(key, (const void*)local);
-					dial++;
-					return thread;
-				}
-				else
-					r++;
+				*local = thread;
+				if(NULL == pthread_getspecific(key))
+					pthread_setspecific(key, (const void*)local);
+				return thread;
 			}
 		}
-	} while(0 < r && 0 == sched_yield());
-	dial++;
+	} while((thread) && 0 == sched_yield());
 
 	assert(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
 	*local = thread;

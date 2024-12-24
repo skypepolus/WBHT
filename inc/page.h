@@ -42,7 +42,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assert.h>
 
 enum {
-	WBHT_LENGTH = PAGE_SIZE * 64, 
+	WBHT_LENGTH = PAGE_SIZE * 16,
 	WBHT_ALIGN = WBHT_LENGTH, 
 	WBHT_LIMIT = WBHT_LENGTH - PAGE_SIZE
 };
@@ -54,8 +54,10 @@ struct page
 {
 	struct thread* thread;
 	int64_t front[1];
-	uint8_t payload[WBHT_LENGTH - sizeof(struct thread*) - sizeof(int64_t) - sizeof(int64_t)];
+	uint8_t payload[WBHT_LENGTH - sizeof(struct thread*) - sizeof(int64_t) - sizeof(int64_t) - sizeof(struct page*) - sizeof(void**)];
 	int64_t back[1];
+	struct page* next;
+	void** free;
 };
 
 #define WBHT_PRINTF(stream, format...) \
