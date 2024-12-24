@@ -52,7 +52,7 @@ struct thread
 	void** free;
 	int reference;
 	struct page* local;
-	struct list list[sizeof(struct heap) / sizeof(__int128)];
+	struct list list[sizeof(struct heap) / 16];
 	uint64_t barrier[sizeof(void*) * 15];
 	struct page* remote;
 	struct

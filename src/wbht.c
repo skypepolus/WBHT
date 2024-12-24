@@ -42,7 +42,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "static.h"
 
 #define HEAP_LIMIT (int64_t)(sizeof(struct heap) / sizeof(int64_t))
-#define LINK_LIMIT (int64_t)((sizeof(int64_t) + sizeof(struct link) + sizeof(int64_t)) / sizeof(int64_t))
 #define INDEX(size) ((((size) - 2) * sizeof(int64_t)) / sizeof(__int128) - 1)
 
 #ifndef __OPTIMIZE__
@@ -170,11 +169,11 @@ static inline void local_free(struct thread* thread, int64_t* front, int64_t* ba
 		else
 		if(0 < back[1])
 		{
-			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			link_remove((struct link*)(back + 1 + 1));
 			back += back[1];
 			*back += front[-1] + (-1) * *front;
 			front -= front[-1];
-		}	
+		}
 		else
 		{
 			*back *= (-1);
@@ -187,8 +186,7 @@ static inline void local_free(struct thread* thread, int64_t* front, int64_t* ba
 	else
 	if(0 < front[-1])
 	{
-		int64_t* adjacent = front - front[-1];
-		if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+		link_remove((struct link*)(front - front[-1] + 1));
 		if(HEAP_LIMIT < back[1])
 		{
 			dst = (struct heap*)(front - front[-1]);
@@ -203,7 +201,7 @@ static inline void local_free(struct thread* thread, int64_t* front, int64_t* ba
 		else
 		if(0 < back[1])
 		{
-			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			link_remove((struct link*)(back + 1 + 1));
 			back += back[1];
 			*back += (-1) * *front + front[-1];
 			front -= front[-1];
@@ -229,7 +227,7 @@ static inline void local_free(struct thread* thread, int64_t* front, int64_t* ba
 	else
 	if(0 < back[1])
 	{
-		if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+		link_remove((struct link*)(back + 1 + 1));
 		back += back[1];
 		*back += (-1) * *front;
 	}
@@ -240,10 +238,10 @@ static inline void local_free(struct thread* thread, int64_t* front, int64_t* ba
 	else
 	{
 		*front = *back;
-		if(LINK_LIMIT <= *front) link_insert((struct link*)(front + 1), &thread->list[INDEX(*front)].tail);
+		link_insert((struct link*)(front + 1), &thread->list[INDEX(*front)].tail);
 	}
 RETURN:
-	if((sizeof(struct heap) + PAGE_SIZE * 2 >> 3) < *front)
+	if((sizeof(struct heap) + PAGE_SIZE * 2 >> 3) <= *front)
 	{
 		if(0 == front[-1] && 0 == back[1])
 		{
@@ -255,7 +253,6 @@ RETURN:
 			thread->reference--;
 			return;
 		}
-#ifndef __OPTIMIZE__
 		else
 		{
 			void* addr = (void*)((size_t)front + sizeof(struct heap) + PAGE_SIZE - 1 & PAGE_MASK);
@@ -268,7 +265,6 @@ RETURN:
 					WBHT_ASSERT(MAP_FAILED != mmap(addr, length & PAGE_MASK, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)); 	
 			}
 		}
-#endif
 	}
 #ifndef __OPTIMIZE__
 	WBHT_ASSERT(NULL == thread->root || 0 < *thread->root->size);
@@ -284,7 +280,6 @@ RETURN:
 static inline void* local_shrink(struct thread* thread, int64_t* front, int64_t* back, int64_t size)
 {
 	int64_t delta = *front + size;
-	int64_t* adjacent;
 	WBHT_ASSERT(0 > *front && 0 > *back && *front == *back);
 	WBHT_ASSERT(0 > delta);
 	delta *= (-1);
@@ -300,31 +295,31 @@ static inline void* local_shrink(struct thread* thread, int64_t* front, int64_t*
 	else
 	if(0 < front[-1])
 	{
-		adjacent = front - front[-1];
-		if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+		int64_t* adjacent = front - front[-1];
+		link_remove((struct link*)(adjacent + 1));
 		front += delta;
 		front[-1] = *adjacent + delta;
-		if(HEAP_LIMIT < front[-1])
+		if(HEAP_LIMIT < *adjacent)
 			thread->root = heap_insert(thread->root, (struct heap*)adjacent, front[-1]);
 		else
 		{
 			*adjacent = front[-1];
-			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+			link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 		}
 		*back += delta;
 		*front = *back;
 	}
 	else
 	{
-		adjacent = front;
+		int64_t* adjacent = front;
 		front += delta;
 		front[-1] = delta;
-		if(HEAP_LIMIT < front[-1])
+		if(HEAP_LIMIT < delta)
 			thread->root = heap_insert(thread->root, (struct heap*)adjacent, delta);
 		else
 		{
 			*adjacent = delta;
-			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+			link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 		}
 		*back += delta;
 		*front = *back;
@@ -362,15 +357,14 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 					thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
 					back += delta;
 					back[1] = *adjacent;
-					if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
+					link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 				}
 			}
 			else
 			{
-				if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+				link_remove((struct link*)(back + 1 + 1));
 				back += delta;
 				back[1] = *adjacent;
-				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 			}
 		}
 		else
@@ -379,7 +373,6 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 			if(HEAP_LIMIT < delta)
 				thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
 			else
-			if(LINK_LIMIT <= back[1])
 				link_remove((struct link*)(back + 1 + 1));
 			back += delta;
 		}
@@ -410,7 +403,7 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 		if(0 < back[1])
 		{
 			int64_t* adjacent = back + back[1];
-			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			link_remove((struct link*)(back + 1 + 1));
 			*adjacent += delta;
 			back -= delta;
 			if(HEAP_LIMIT < *adjacent)
@@ -418,7 +411,7 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 			else
 			{
 				back[1] = *adjacent;
-				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
+				link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 			}
 			*front += delta;
 			*back = *front;
@@ -435,7 +428,7 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 			else
 			{
 				back[1] = delta;
-				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
+				link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 			}	
 		}
 	}
@@ -489,9 +482,6 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 	struct heap* heap;
 	int64_t* front;
 	int64_t* back;
-#ifndef __OPTIMIZE__
-	WBHT_ASSERT(NULL == thread->root || 0 == sanity_check(thread->root->size + 1));
-#endif
 	if(HEAP_LIMIT >= size)
 	{
 		int index = INDEX(size);
@@ -501,12 +491,12 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 			struct link* link = list->head.next;
 			link_remove(link);
 			front = ((int64_t*)link) - 1;
-			back = front + *front - 1;
+			back = back + *back - 1;
 			*front *= (-1);
 			*back = *front;
 			return (void*)(front + 1);
 		}
-		for(index++; index < sizeof(thread->list) / sizeof(*thread->list); index++)
+		for(index++; index <= sizeof(thread->list) / sizeof(*thread->list); index++)
 		{
 			struct list* list = thread->list + index;
 			if(list->head.next != &list->tail)
@@ -522,8 +512,8 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 				front = adjacent + delta;
 
 				*adjacent = delta;
-				if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 				front[-1] = delta;
+				link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 
 				*back -= delta;
 				*back *= (-1);
@@ -533,6 +523,9 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 		}
 	}
 	heap = heap_first_fit(thread->root, size);
+#ifndef __OPTIMIZE__
+	WBHT_ASSERT(NULL == thread->root || 0 == sanity_check(thread->root->size + 1));
+#endif
 	if(NULL == heap)
 	{
 		struct page* page = local_page(thread, sizeof(void*)); 
@@ -564,7 +557,7 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 		{
 			thread->root = heap_remove(thread->root, heap);
 			*heap->size = delta;
-			if(LINK_LIMIT <= *heap->size) link_insert((struct link*)(heap->size + 1), &thread->list[INDEX(*heap->size)].tail);
+			link_insert((struct link*)(heap->size + 1), &thread->list[INDEX(*heap->size)].tail);
 		}
 		front = heap->size + delta;
 		front[-1] = delta;
@@ -649,12 +642,12 @@ static inline void* local_coalesce(struct thread* thread, int64_t* front, int64_
 
 	if(size < delta)
 		return local_shrink(thread, front, back, size);
-	if(0 < back[1])
-		delta += back[1];
-	if(size <= delta)
-		return local_realloc(thread, front, back, size);
 	if(0 < front[-1])
 		delta += front[-1];
+	if(size <= delta)
+		return local_realloc(thread, front, back, size);
+	if(0 < back[1])
+		delta += back[1];
 	if(delta < size)
 	{
 		local_free(thread, front, back);
@@ -673,14 +666,14 @@ static inline void* local_coalesce(struct thread* thread, int64_t* front, int64_
 			{
 				thread->root = heap_remove(thread->root, (struct heap*)adjacent);
 				*adjacent = delta;
-				if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+				link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 			}
 		}
 		else
 		{
-			if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+			link_remove((struct link*)(adjacent + 1));
 			*adjacent = delta;
-			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+			link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
 		}
 		front = adjacent + delta;
 		front[-1] = delta;
@@ -694,19 +687,17 @@ static inline void* local_coalesce(struct thread* thread, int64_t* front, int64_
 		if(0 < back[1])
 		{
 			adjacent = back + back[1];
-			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			link_remove((struct link*)(back + 1 + 1));
 			back = adjacent;
 		}
 	}
 	else
 	{
-		adjacent = front - front[-1];
-		if(HEAP_LIMIT < *adjacent)
-			thread->root = heap_remove(thread->root, (struct heap*)adjacent);
+		front -= front[-1];
+		if(HEAP_LIMIT < front[-1])
+			thread->root = heap_remove(thread->root, (struct heap*)front);
 		else
-		if(LINK_LIMIT <= *adjacent)
-			link_remove((struct link*)(adjacent + 1));
-		front = adjacent;
+			link_remove((struct link*)(front + 1));
 		if(HEAP_LIMIT < back[1])
 		{
 			adjacent = back + back[1];
@@ -717,7 +708,7 @@ static inline void* local_coalesce(struct thread* thread, int64_t* front, int64_
 		if(0 < back[1])
 		{
 			adjacent = back + back[1];
-			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			link_remove((struct link*)(back + 1 + 1));
 			back = adjacent;
 		}
 	}
@@ -730,15 +721,13 @@ WEAK void* wbht_malloc(size_t size)
 {
 	if(0 < size)
 	{
-		struct thread* thread = (local) ? local : thread_initial(&local), * remote;
+		struct thread* thread = (local) ? local : thread_initial(&local);
 		struct thread* remove;
 		void** free;
 		struct page* page;
 		size += sizeof(__int128) - 1;
 		size &= ~(sizeof(__int128) - 1);
-		if(MAP_FAILED == thread->remote)
-			;
-		else
+
 		if(unlikely(free = thread->free))
 		{
 			int64_t* front; 
@@ -747,7 +736,8 @@ WEAK void* wbht_malloc(size_t size)
 			thread->free = (void**)*free;
 			front = ((int64_t*)free) - 1;
 			back = front - *front - 1;
-			local_free(thread, front, back);
+			if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+				return ptr;
 			if((free = thread->free))
 			{
 				thread->free = (void**)*free;
@@ -755,12 +745,6 @@ WEAK void* wbht_malloc(size_t size)
 				back = front - *front - 1;
 				if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
 					return ptr;
-			}
-			else
-			if((page = thread->local) && (NULL == page->free))
-			{
-				page->next = MAP_FAILED;
-				thread->local = NULL;
 			}
 		}
 		else
@@ -800,8 +784,7 @@ WEAK void* wbht_malloc(size_t size)
 				local = thread = remote;
 			}
 		}
-		else
-			__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+
 		if(WBHT_LIMIT < size)
 			return wbht_map(sizeof(__int128), size);
 		else
