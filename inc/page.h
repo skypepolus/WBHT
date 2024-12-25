@@ -53,8 +53,9 @@ enum {
 struct page
 {
 	struct thread* thread;
+	void* root;
 	int64_t front[1];
-	uint8_t payload[WBHT_LENGTH - sizeof(struct thread*) - sizeof(int64_t) - sizeof(int64_t) - sizeof(struct page*) - sizeof(void**)];
+	uint8_t payload[WBHT_LENGTH - sizeof(struct thread*) - sizeof(void*) - sizeof(int64_t) - sizeof(int64_t) - sizeof(struct page*) - sizeof(void**)];
 	int64_t back[1];
 	struct page* next;
 	void** free;

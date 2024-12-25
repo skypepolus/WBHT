@@ -75,11 +75,25 @@ static inline struct thread* thread_initial(struct thread** local)
 			}
 		}
 	} while((thread) && 0 == sched_yield());
-
+	do
+	{
+		if(thread = (struct thread*)channel[1].thread)
+		{
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
+			if(__sync_bool_compare_and_swap(&channel[1].thread, thread, thread->next))
+			{
+				*local = thread;
+				if(NULL == pthread_getspecific(key))
+					pthread_setspecific(key, (const void*)local);
+				return thread;
+			}
+		}
+	} while((thread) && 0 == sched_yield());
 	assert(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
 #ifndef __btff_h__
 	for(r = 0; r < sizeof(thread->list) / sizeof(*thread->list); r++)
 		list_initial(thread->list + r);
+	thread->remote = MAP_FAILED;
 #endif
 	*local = thread;
 	pthread_setspecific(key, (const void*)local);
