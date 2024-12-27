@@ -132,7 +132,9 @@ static void destructor(register void* data)
 						break;
 				}
 				else
-				if(!__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+				if(__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+					__atomic_thread_fence(__ATOMIC_RELEASE);
+				else
 					break;
 			}
 			if(0 == thread->reference)
@@ -791,7 +793,8 @@ WEAK void* wbht_malloc(size_t size)
 				thread->local = page;
 		}
 		else
-			__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+		if(__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+			__atomic_thread_fence(__ATOMIC_RELEASE);
 
 		if(WBHT_LIMIT < size)
 			return wbht_map(sizeof(__int128), size);
@@ -1046,7 +1049,8 @@ WEAK void wbht_free(void* ptr)
 				}
 			}
 			else
-				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+			if(__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+				__atomic_thread_fence(__ATOMIC_RELEASE);
 		}
 		else
 		{
@@ -1164,7 +1168,8 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 					thread->local = page;
 			}
 			else
-				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+			if(__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+				__atomic_thread_fence(__ATOMIC_RELEASE);
 
 			page = WBHT_PAGE(ptr);
 			size += sizeof(__int128) - 1;
@@ -1323,7 +1328,8 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 					thread->local = page;
 			}
 			else
-				__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED);
+			if(__sync_bool_compare_and_swap(&thread->remote, NULL, MAP_FAILED))
+				__atomic_thread_fence(__ATOMIC_RELEASE);
 
 			page = WBHT_PAGE(ptr);
 			size += sizeof(__int128) - 1;
