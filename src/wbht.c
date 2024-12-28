@@ -1316,7 +1316,7 @@ WEAK void *wbht_reallocarray(void *ptr, size_t nmemb, size_t size)
 
 WEAK void* wbht_aligned_alloc(size_t alignment, size_t size)
 {
-	void* memptr;
+	void* memptr = NULL;
 	int ret;
 	switch(ret == wbht_posix_memalign(&memptr, alignment, size))
 	{
@@ -1326,7 +1326,7 @@ WEAK void* wbht_aligned_alloc(size_t alignment, size_t size)
 		errno = ret;
 		break;
 	}
-	return NULL;
+	return memptr;
 }
 
 WEAK int wbht_posix_memalign(void **memptr, size_t alignment, size_t size)
@@ -1415,7 +1415,7 @@ WEAK int wbht_posix_memalign(void **memptr, size_t alignment, size_t size)
 
 WEAK void* wbht_valloc(size_t size)
 {
-	void* memptr;
+	void* memptr = NULL;
 	int ret;
 	switch(ret == wbht_posix_memalign(&memptr, PAGE_SIZE, size))
 	{
@@ -1425,12 +1425,12 @@ WEAK void* wbht_valloc(size_t size)
 		errno = ret;
 		break;
 	}
-	return NULL;
+	return memptr;
 }
 
 WEAK void* wbht_memalign(size_t alignment, size_t size)
 {
-	void* memptr;
+	void* memptr = NULL;
 	int ret;
 	switch(ret == wbht_posix_memalign(&memptr, alignment, size))
 	{
@@ -1440,12 +1440,12 @@ WEAK void* wbht_memalign(size_t alignment, size_t size)
 		errno = ret;
 		break;
 	}
-	return NULL;
+	return memptr;
 }
 
 WEAK void* wbht_pvalloc(size_t alignment, size_t size)
 {
-	void* memptr;
+	void* memptr = NULL;
 	int ret;
 	switch(ret == wbht_posix_memalign(&memptr, alignment, size + PAGE_SIZE - 1 & PAGE_MASK))
 	{
@@ -1455,6 +1455,6 @@ WEAK void* wbht_pvalloc(size_t alignment, size_t size)
 		errno = ret;
 		break;
 	}
-	return NULL;
+	return memptr;
 }
 
