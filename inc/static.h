@@ -3,7 +3,7 @@
 
 static struct
 {
-	uint8_t barrier[sizeof(void*) * 15];
+	uint8_t barrier[sizeof(void*) * 7];
 	struct thread* thread;
 }* channel;
 
@@ -11,7 +11,9 @@ static unsigned nprocs = 0;
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 static pthread_key_t key;
 static size_t thread_length;
-static uint8_t barrier[sizeof(void*) * 15];
+static uint8_t barrier_polling[sizeof(void*) * 7];
+static int polling = 0;
+static uint8_t barrier[sizeof(void*) * 7];
 
 static void destructor(register void* data);
 
@@ -63,37 +65,26 @@ static inline struct thread* thread_initial(struct thread** local)
 		assert(0 == pthread_once(&once_control, init_routine));
 	do
 	{
-		if(thread = (struct thread*)channel->thread)
-		{
-			__atomic_thread_fence(__ATOMIC_ACQUIRE);
-			if(__sync_bool_compare_and_swap(&channel->thread, thread, thread->next))
+		int i;
+		for(r = 0, i = 0; i < nprocs; i++, polling = (polling + 1) % nprocs)
+			if(thread = (struct thread*)channel[polling].thread)
 			{
-				*local = thread;
-				if(NULL == pthread_getspecific(key))
-					pthread_setspecific(key, (const void*)local);
-				return thread;
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				if(__sync_bool_compare_and_swap(&channel[polling].thread, thread, thread->next))
+				{
+					*local = thread;
+					if(NULL == pthread_getspecific(key))
+						pthread_setspecific(key, (const void*)local);
+					return thread;
+				}
+				else
+					r++;
 			}
-		}
-	} while((thread) && 0 == sched_yield());
-	do
-	{
-		if(thread = (struct thread*)channel[1].thread)
-		{
-			__atomic_thread_fence(__ATOMIC_ACQUIRE);
-			if(__sync_bool_compare_and_swap(&channel[1].thread, thread, thread->next))
-			{
-				*local = thread;
-				if(NULL == pthread_getspecific(key))
-					pthread_setspecific(key, (const void*)local);
-				return thread;
-			}
-		}
-	} while((thread) && 0 == sched_yield());
+	} while((r) && 0 == sched_yield());
 	assert(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
 #ifndef __btff_h__
 	for(r = 0; r < sizeof(thread->list) / sizeof(*thread->list); r++)
 		list_initial(thread->list + r);
-	thread->remote = MAP_FAILED;
 #endif
 	*local = thread;
 	pthread_setspecific(key, (const void*)local);

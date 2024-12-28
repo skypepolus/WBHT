@@ -41,9 +41,10 @@ struct thread
 {
 	struct thread* next;
 	struct heap* root;
-#ifdef __btff_h__
 	size_t addr;
 	size_t length;
+	int polling;
+#ifdef __btff_h__
 	struct btree* btree;
 	struct btree* local;
 	uint64_t barrier[sizeof(void*) * 15];
@@ -53,11 +54,11 @@ struct thread
 	int reference;
 	struct page* local;
 	struct list list[sizeof(struct heap) / 16];
-	uint64_t barrier[sizeof(void*) * 15];
+	uint64_t barrier[sizeof(void*) * 7];
 	struct page* remote;
 	struct
 	{
-		uint8_t barrier[sizeof(void*) * 15];
+		uint8_t barrier[sizeof(void*) * 7];
 		void** free;
 	} channel[1];
 #endif
