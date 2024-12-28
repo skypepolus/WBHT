@@ -1286,29 +1286,30 @@ WEAK void* wbht_reallocf(void *ptr, size_t size)
 			wbht_free(ptr);
 	}
 	else
-	if(0 < size)
 		return wbht_malloc(size);
 	return NULL;
-
 }
 
 WEAK void *wbht_reallocarray(void *ptr, size_t nmemb, size_t size)
 {
-	if(64 == sizeof(void*))
+	if(0 < nmemb)
 	{
-		if(size >= (1UL << 48) / nmemb)
+		if(8 == sizeof(void*))
 		{
-			errno = EINVAL;
-			return NULL;
+			if(size >= (1UL << 48) / nmemb)
+			{
+				errno = EINVAL;
+				return NULL;
+			}
 		}
-	}
-	else
-	if(32 == sizeof(void*))
-	{
-		if(size >= (1UL << 31) / nmemb)
+		else
+		if(4 == sizeof(void*))
 		{
-			errno = EINVAL;
-			return NULL;
+			if(size >= (1UL << 31) / nmemb)
+			{
+				errno = EINVAL;
+				return NULL;
+			}
 		}
 	}
 	return wbht_realloc(ptr, nmemb * size);
