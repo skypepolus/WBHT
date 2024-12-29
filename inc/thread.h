@@ -36,6 +36,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "list.h"
 #ifdef __btff_h__
 struct btree;
+#else
+#define HEAP_LIMIT (int64_t)(sizeof(struct heap) / sizeof(int64_t))
 #endif
 struct thread
 {
@@ -53,9 +55,9 @@ struct thread
 	void** free;
 	int reference;
 	struct page* local;
-	struct list list[sizeof(struct heap) / 16];
+	struct list list[HEAP_LIMIT / 2];
 	uint64_t barrier[sizeof(void*) * 7];
-	struct page* remote;
+	struct page* volatile remote;
 	struct
 	{
 		uint8_t barrier[sizeof(void*) * 7];
