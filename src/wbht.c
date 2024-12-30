@@ -465,42 +465,53 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 
 static inline struct page* local_page(struct thread* thread, size_t align)
 {
-	uint64_t addr;
-	uint64_t length;
-	uint64_t page;
+	for(;;)
+	{
+		struct page* page;
+		size_t length;
+		size_t addr = thread->addr + PAGE_SIZE + WBHT_ALIGN - 1 & ~(WBHT_ALIGN - 1);
+		void* ptr;
 
-	if(align < WBHT_ALIGN)
-		align = WBHT_ALIGN;
-
-	length = WBHT_LENGTH + align;
-	if(MAP_FAILED == (void*)(addr = (size_t)mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
-	{
-		errno = ENOMEM;
-		WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
-		return NULL;
+		if(PAGE_SIZE <= addr - thread->addr && addr <= thread->addr + thread->length)
+		{
+			page = (struct page*)(addr - PAGE_SIZE);
+			addr = (size_t)page + WBHT_LENGTH;
+			if(addr <= thread->addr + thread->length)
+			{
+				if(thread->addr < (size_t)page)
+				{
+					length = (size_t)page - thread->addr;
+					WBHT_ASSERT(0 == munmap((void*)thread->addr, length));
+				}
+				WBHT_ASSERT(0 == mprotect((void*)page, WBHT_LENGTH, PROT_READ|PROT_WRITE));
+				length = addr - thread->addr;
+				thread->addr += length;
+				thread->length -= length;
+				((struct page*)page)->thread = thread;
+				((struct page*)page)->next = MAP_FAILED;
+				thread->reference++;
+				return (struct page*)page;
+			}
+		}
+		if(0 < thread->length)
+			WBHT_ASSERT(0 == munmap((void*)thread->addr, thread->length));
+		length = PAGE_SIZE * 1024;
+		if(MAP_FAILED == (ptr = mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
+		{
+			thread->length = 0;
+			errno = ENOMEM;
+			WBHT_PRINTF(stderr, "ENOMEM %lu %s %d\n", size, __FILE__, __LINE__);
+			return NULL;
+		}
+		else
+		{
+			thread->addr = (size_t)ptr;
+			thread->length = length;
+		}
 	}
-	page = addr + PAGE_SIZE;
-	page += align - 1;
-	page &= UINT64_MAX - (align - 1);
-	page -= PAGE_SIZE;
-	if(addr < page)
-	{
-		uint64_t delta = page - addr;
-		WBHT_ASSERT(0 == munmap((void*)addr, delta));
-		length -= delta;
-	}
-	addr = page + WBHT_LENGTH;
-	if(addr < page + length)
-	{
-		uint64_t delta = page + length - addr;
-		WBHT_ASSERT(0 == munmap((void*)addr, delta));
-		length -= delta;
-	}
-	WBHT_ASSERT(0 == mprotect((void*)page, length, PROT_READ|PROT_WRITE));
-	((struct page*)page)->thread = thread;
-	((struct page*)page)->next = MAP_FAILED;
-	thread->reference++;
-	return (struct page*)page;
+	errno = ENOMEM;
+	WBHT_PRINTF(stderr, "ENOMEM %lu %s %d\n", size, __FILE__, __LINE__);
+	return NULL;
 }
 
 static inline void* local_alloc(struct thread* thread, int64_t size)
@@ -825,6 +836,32 @@ WEAK void* wbht_malloc(size_t size)
 					}
 					else
 						thread->polling = (thread->polling + 1) % nprocs;
+				}
+			}
+			else
+			if((free = thread->free))
+			{
+				thread->free = (void**)*free;
+				front = ((int64_t*)free) - 1;
+				if((back = boundary(front, __FILE__, __LINE__)))
+				{
+					if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+						return ptr;
+					else
+					if(0 == thread->reference)
+					{
+						if((remote = channel[thread->polling].thread))
+						{
+							__atomic_thread_fence(__ATOMIC_ACQUIRE);
+							if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+							{
+								destructor(thread);
+								pthread_setspecific(key, remote);
+							}
+						}
+						else
+							thread->polling = (thread->polling + 1) % nprocs;
+					}
 				}
 			}
 		}
