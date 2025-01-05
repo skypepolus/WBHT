@@ -15,4 +15,4 @@ External fragmentation is chosen over internal fragmentation, because external f
 3. to implement multi-thread B-Tree-First-Fit, which is another variant of Brent's algorithm.[1]
 
 # Reference
-1. R. P. Brent (July 1989). "Efficient Implementation of the First-Fit Strategy for Dynamic Storage Allocation". ACM Transactions on i’rograrrlming &guages and Systems, Vol. 11, No. 3, July 1989. p. 388.
+1. R. P. Brent (July 1989). "Efficient Implementation of the First-Fit Strategy for Dynamic Storage Allocation". ACM Transactions on Programing Languages and Systems, Vol. 11, No. 3, July 1989. p. 388.
