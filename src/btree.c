@@ -622,7 +622,7 @@ static inline void thread_btree_swap(struct btree* btree)
 			thread->root = heap_remove(thread->root, &btree->heap);
 			thread->btree = btree;
 			btree = tmp;
-			thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+			heap_insert(&thread->root, &btree->heap, btree_key);
 		}
 		else
 		if(btree->heap.size[HEAP_SIZE] < btree_key)
