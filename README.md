@@ -483,6 +483,6 @@ glibc-thread yal   7.596 5228 7.85 0.03 0 1970<br>
 glibc-thread wbht  7.963 3192 7.89 0.04 0 9407<br>
 
 # Reference
-1. R. P. Brent (July 1989). "Efficient Implementation of the First-Fit Strategy for Dynamic Storage Allocation". ACM Transactions on Programming Languages and Systems, Vol. 11, No. 3, July
+1. R. P. Brent (July 1989). "Efficient Implementation of the First-Fit Strategy for Dynamic Storage Allocation". ACM Transactions on Programming Languages and Systems, Vol. 11, No. 3, July 1989. p. 388.
 2. https://github.com/daanx/mimalloc-bench
-1989. p. 388.
+
