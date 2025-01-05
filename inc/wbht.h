@@ -53,7 +53,7 @@ int wbht_posix_memalign(void **memptr, size_t alignment, size_t size)
 void* wbht_valloc(size_t size)
 	PRIVATE(wbht_valloc);
 void* wbht_memalign(size_t alignment, size_t size)
-	PRIVATE(wbht_mmemalign); 
+	PRIVATE(wbht_memalign); 
 void* wbht_pvalloc(size_t alignment, size_t size)
 	PRIVATE(wbht_pvalloc);
 

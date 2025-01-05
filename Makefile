@@ -27,35 +27,53 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-CC=gcc
-CXX=g++
-CFLAGS=-Iinc -fPIC -O3
-LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
-AR=ar
+CFLAGS=-Iinc -fPIC -g -O1
+WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc,--defsym=reallocf=.wbht.private.wbht_reallocf,--defsym=reallocarray=.wbht.private.wbht_reallocarray,--defsym=aligned_alloc=.wbht.private.wbht_aligned_alloc,--defsym=posix_memalign=.wbht.private.wbht_posix_memalign,--defsym=valloc=.wbht.private.wbht_valloc,--defsym=memalign=.wbht.private.wbht_memalign,--defsym=pvalloc=.wbht.private.wbht_pvalloc
+BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc,--defsym=reallocf=.wbht.private.btff_reallocf,--defsym=reallocarray=.wbht.private.btff_reallocarray,--defsym=aligned_alloc=.wbht.private.btff_aligned_alloc,--defsym=posix_memalign=.wbht.private.btff_posix_memalign,--defsym=valloc=.wbht.private.btff_valloc,--defsym=memalign=.wbht.private.btff_memalign,--defsym=pvalloc=.wbht.private.btff_pvalloc
 
 .PHONY: lib
-lib: lib/libwbht.a lib/libwbht.so
+lib: lib/libwbht.so lib/libbtff.so lib/libbtff-avx512f.so
 
-lib/libwbht.so: src/wbht.o
-	$(CC) $(CFLAGS) -shared $? $(LDFLAGS) -o $@
+lib/libwbht.so: lib/libwbht.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
+
+lib/libbtff.so: lib/libbtff.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
+
+lib/libbtff-avx512f.so: lib/libbtff-avx512f.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
 
+lib/libbtff.a: src/btff.o src/btree.o
+	$(AR) rs $@ $?
+
+lib/libbtff-avx512f.a: src/btff-avx512f.o src/btree-avx512f.o
+	$(AR) rs $@ $?
+
+.PHONY: test
+test: lib
+	make -C test
+
+.PHONY: bench
+bench: lib
+	make -C bench
+
+%-avx512f.o: %.c
+	$(CC) $(CFLAGS) -DAVX512F -march=native -mavx512f -masm=intel -mtune=intel -c $< -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.cpp
-	$(CXX) $(CFLAGS) -c $< -o $@
-
 .PHONY: clean
 clean:
-	find . -name "*.[oa]" -exec rm -f {} \;
-	find . -name "*.so" -exec rm -f {} \;
+	find src -name "*.[oa]" -exec rm -f {} \;
+	find lib -name "*.so" -exec rm -f {} \;
 
 .PHONY: dep
 dep:
-	$(CC) $(CFLAGS) -M inc/*.h src/*.c > .dep
+	$(CC) $(CFLAGS) -M src/*.c > .dep
 
 ifeq (1, $(shell if [ -e .dep ]; then echo 1; fi))
 include .dep

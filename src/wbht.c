@@ -32,30 +32,18 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "heap.h"
 #include "page.h"
 #include "wbht.h"
+#include "list.h"
 #include <sys/mman.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
+#include "static.h"
 
-static struct
-{
-	uint8_t barrier[sizeof(void*) * 15];
-	struct thread* thread;
-}* channel;
+#define LINK_LIMIT (int64_t)(1 + 2 + 1)
+#define INDEX(size) ((((size) - 2) * sizeof(int64_t)) / sizeof(__int128) - 1)
 
-static unsigned nprocs = 0;
-static pthread_once_t once_control = PTHREAD_ONCE_INIT;
-static pthread_key_t key;
-static size_t thread_length;
-
-static uint8_t barrier_polling[sizeof(void*) * 15];
-static unsigned polling;
-static uint8_t barrier_scan[sizeof(void*) * 15];
-static unsigned scan;
-static uint8_t barrier_dial[sizeof(void*) * 15];
-static unsigned dial;
 #ifndef __OPTIMIZE__
 static unsigned sanity_check(void* ptr)
 {
@@ -88,171 +76,113 @@ static unsigned sanity_check(void* ptr)
 	return error;
 }
 #endif
-static void local_free(struct thread* thread, int64_t* front, int64_t* back);
-
-static void remote_free(struct thread* thread, void* ptr)
+static inline int64_t* boundary(int64_t* front, const char* file, int line)
 {
-	do
+	int64_t* back;
+	struct page* page = WBHT_PAGE(front);
+#ifdef __OPTIMIZE__
+	if(front <= page->front || 0 <= *front || -1 * (int64_t)WBHT_LIMIT > *front)
 	{
-		register unsigned i, j;
-		for(i = 0, j = polling, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
-		{
-			void** free = (void**)ptr;
-			*free = thread->channel[j].free;
-			__atomic_thread_fence(__ATOMIC_RELEASE);
-			if(__sync_bool_compare_and_swap(&thread->channel[j].free, *free, free))
-			{
-				polling++;
-				return;
-			}
-		}
-	} while(0 == sched_yield());
-	polling++;
+		WBHT_PRINTF(stderr, "%p corruption %ld %s %d\n", front + 1, *front, file, line);
+		return NULL;
+	}
+#endif
+	back = front - *front - 1;
+#ifdef __OPTIMIZE__
+	if(page->back <= back || 0 <= *back || *front != *back)
+	{
+		WBHT_PRINTF(stderr, "%p corruption %ld %ld %s %d\n", front + 1, *front, *back, file, line);
+		return NULL;
+	}
+#endif
+	return back;
 }
-
 
 static void destructor(register void* data)
 {
 	if((data))
 	{
-	#define local ((struct thread**)data)
-		struct thread* thread = *local;
+		struct thread* thread = (struct thread*)data;
 		if((thread))
 		{
-			*local = NULL;
-			while((thread->free))
+			struct page* page;
+			int64_t* front; 
+			int64_t* back;
+			void** free;
+			for(;;)
 			{
-				void** free;
-				if((free = thread->free))
+				if(unlikely(page = thread->local))
 				{
-					int64_t* front; 
-					int64_t* back;
-					thread->free = (void**)*free;
-					front = ((int64_t*)free) - 1;
-					back = front - *front - 1;
-					local_free(thread, front, back);
-				}
-			}
-			if(1 == thread->reference)
-			{
-				struct heap* root;
-				if((root = thread->root) && 0 < *root->size)
-				{
-					int64_t* front = root->size;
-					int64_t* back = front + *front - 1;
-					if(0 == front[-1] && 0 == back[1])
+					if((free = thread->free))
 					{
-						thread->root = heap_remove(thread->root, root);
-						WBHT_ASSERT(0 == munmap(WBHT_PAGE(front), WBHT_LENGTH));
-						thread->reference--;
+						int64_t* front; 
+						int64_t* back;
+						void* ptr;
+						thread->free = (void**)*free;
+						front = ((int64_t*)free) - 1;
+						if((back = boundary(front, __FILE__, __LINE__)))
+							local_free(thread, front, back);
+					}
+					else
+					if(free = page->free)
+					{
+						if(__sync_bool_compare_and_swap(&page->free, free, NULL))
+						{
+							__atomic_thread_fence(__ATOMIC_ACQUIRE);
+							thread->free = free;
+						}
+						else
+							break;
+					}
+					else
+					{
+						page->next = MAP_FAILED;
+						thread->local = NULL;
 					}
 				}
+				else
+				if(unlikely(page = thread->remote))
+				{
+					__atomic_thread_fence(__ATOMIC_ACQUIRE);
+					if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+						thread->local = page;
+					else
+						break;
+				}
+				else
+					break;
 			}
 			if(0 == thread->reference)
+			{
+				if(0 < thread->length)
+					WBHT_ASSERT(0 == munmap((void*)thread->addr, thread->length));
 				WBHT_ASSERT(0 == munmap((void*)thread, thread_length));
+			}
 			else
 			{
 				do
 				{
-					register unsigned i, j;
-					for(i = 0, j = dial, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
+					int i;
+					for(i = 0, thread->polling = (thread->polling + 1) % nprocs; 
+						i < nprocs; 
+						i++, thread->polling = (thread->polling + 1) % nprocs)
 					{
-						thread->next = (struct thread*)channel[j].thread;
+						thread->next = (struct thread*)channel[thread->polling].thread;
 						__atomic_thread_fence(__ATOMIC_RELEASE);
-						if(__sync_bool_compare_and_swap(&channel[j].thread, thread->next, thread))
-						{
-							dial++;
+						if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, thread->next, thread))
 							return;
-						}
 					}
 				} while(0 == sched_yield());
-				dial++;
 				WBHT_ASSERT(NULL == thread);
 			}
 		}
-	#undef local
 	}
 }
 
-static void init_routine(void)
-{
-	int fd;
-	char* buf;
-	size_t count;
-	const char* str;
-
-	WBHT_ASSERT(0 <= (fd = open("/proc/cpuinfo", O_RDONLY)));
-	buf = sbrk(0);
-	count = (size_t)buf;
-	count += PAGE_SIZE - 1;
-	count &= PAGE_MASK;
-	count -= (size_t)buf;
-	WBHT_ASSERT(0 == brk(buf + count));
-	while(count == read(fd, buf, count))
-	{
-		count += PAGE_SIZE;
-		WBHT_ASSERT(0 == brk(buf + count));
-	}
-	WBHT_ASSERT((str = strstr(buf, "cpu cores\t:")));
-	str += sizeof("cpu cores\t:");
-	nprocs = atoi(str);
-	close(fd);
-	channel = (void*)buf;
-	WBHT_ASSERT(0 == brk((void*)(channel + nprocs)));
-	for(count = 0; count < nprocs; count++)
-		channel[count].thread = NULL;
-	WBHT_ASSERT(0 == pthread_key_create(&key, destructor));
-	thread_length = offsetof(struct thread, channel) + sizeof(*((struct thread*)NULL)->channel) * nprocs;
-	thread_length += PAGE_SIZE - 1;
-	thread_length &= PAGE_MASK;
-}
-
-static inline struct thread* thread_initial(struct thread** local)
-{
-	int r;
-	struct thread* thread;
-
-	if(0 == nprocs)
-		WBHT_ASSERT(0 == pthread_once(&once_control, init_routine));
-	do
-	{
-		register unsigned i, j;
-		r = 0;
-		for(i = 0, j = dial, j %= nprocs; i < nprocs; i++, j++, j %= nprocs)
-		{
-			if(thread = (struct thread*)channel[j].thread)
-			{
-				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				if(__sync_bool_compare_and_swap(&channel[j].thread, thread, thread->next))
-				{
-					*local = thread;
-					if(NULL == pthread_getspecific(key))
-						pthread_setspecific(key, (const void*)local);
-					dial++;
-					return thread;
-				}
-				else
-					r++;
-			}
-		}
-	} while(0 < r && 0 == sched_yield());
-	dial++;
-
-	WBHT_ASSERT(MAP_FAILED != (void*)(thread = (struct thread*)mmap(NULL, thread_length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)));
-	*local = thread;
-	pthread_setspecific(key, (const void*)local);
-	return thread;
-}
-
-static _Thread_local struct thread* local = NULL;
-
-#define HEAP_LIMIT (int64_t)(sizeof(struct heap) / sizeof(int64_t))
-
-static void local_free(struct thread* thread, int64_t* front, int64_t* back)
+static inline void local_free(struct thread* thread, int64_t* front, int64_t* back)
 {
 	struct heap* dst;
 	struct heap* src;
-	WBHT_ASSERT(0 > *front && 0 > *back && *front == *back);
 	if(HEAP_LIMIT < front[-1])
 	{
 		if(HEAP_LIMIT < back[1])
@@ -260,19 +190,20 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 			int64_t delta = back[1];
 			thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
 			back += delta;
-			*back += front[-1] + -1 * *front;
+			*back += front[-1] + (-1) * *front;
 			front -= front[-1];
 		}
 		else
 		if(0 < back[1])
 		{
+			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 			back += back[1];
-			*back += -1 * *front + front[-1];
+			*back += front[-1] + (-1) * *front;
 			front -= front[-1];
 		}
 		else
 		{
-			*back *= -1;
+			*back *= (-1);
 			*back += front[-1]; 
 			front -= front[-1];
 		}
@@ -282,12 +213,14 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 	else
 	if(0 < front[-1])
 	{
+		int64_t* adjacent = front - front[-1];
+		if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
 		if(HEAP_LIMIT < back[1])
 		{
 			dst = (struct heap*)(front - front[-1]);
 			src = (struct heap*)(back + 1);
 			back += back[1];
-			*back += -1 * *front + front[-1];
+			*back += (-1) * *front + front[-1];
 			thread->root = heap_move(thread->root, dst, src);
 			heap_increase(dst, *back);
 			front = dst->size;
@@ -296,13 +229,14 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 		else
 		if(0 < back[1])
 		{
+			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 			back += back[1];
-			*back += -1 * *front + front[-1];
+			*back += (-1) * *front + front[-1];
 			front -= front[-1];
 		}
 		else
 		{
-			*back *= -1;
+			*back *= (-1);
 			*back += front[-1]; 
 			front -= front[-1];
 		}
@@ -313,7 +247,7 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 		dst = (struct heap*)front;
 		src = (struct heap*)(back + 1);
 		back += back[1];
-		*back += -1 * *front;
+		*back += (-1) * *front;
 		thread->root = heap_move(thread->root, dst, src);
 		heap_increase(dst, *back);
 		goto RETURN;
@@ -321,24 +255,43 @@ static void local_free(struct thread* thread, int64_t* front, int64_t* back)
 	else
 	if(0 < back[1])
 	{
+		if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 		back += back[1];
-		*back += -1 * *front;
+		*back += (-1) * *front;
 	}
 	else
-		*back *= -1;
+		*back *= (-1);
 	if(HEAP_LIMIT < *back)
 		thread->root = heap_insert(thread->root, (struct heap*)front, *back);
 	else
-		*front = *back;
-RETURN:
-	if(0 == front[-1] && 0 == back[1])
 	{
-		struct heap* root = thread->root;
-		if((root->edge[HEAP_LEFT]) || (root->edge[HEAP_RIGHT]))
+		*front = *back;
+		if(LINK_LIMIT <= *front) link_insert((struct link*)(front + 1), &thread->list[INDEX(*front)].tail);
+	}
+RETURN:
+	if((sizeof(struct heap) + PAGE_SIZE * 2 >> 3) <= *front)
+	{
+		if(0 == front[-1] && 0 == back[1])
 		{
-			thread->root = heap_remove(root, (struct heap*)front);
-			WBHT_ASSERT(0 == munmap((void*)(front - 2), WBHT_LENGTH));
+			struct page* page = (struct page*)(PAGE_MASK & (size_t)front);
+			thread->root = heap_remove(thread->root, (struct heap*)front);
+			if(thread->local == page)
+				thread->local = NULL;
+			WBHT_ASSERT(0 == munmap((void*)page, WBHT_LENGTH));
 			thread->reference--;
+			return;
+		}
+		else
+		{
+			void* addr = (void*)((size_t)front + sizeof(struct heap) + PAGE_SIZE - 1 & PAGE_MASK);
+			if((*(uint64_t*)addr))
+			{
+				size_t length = (*front - 2) * sizeof(void*) - ((size_t)addr - (size_t)&front[1]);
+				WBHT_ASSERT(front < (int64_t*)addr);
+				WBHT_ASSERT((size_t)addr + (length & PAGE_MASK) <= (size_t)(front + *front - 1));
+				if(PAGE_SIZE <= length)
+					WBHT_ASSERT(MAP_FAILED != mmap(addr, length & PAGE_MASK, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)); 	
+			}
 		}
 	}
 #ifndef __OPTIMIZE__
@@ -350,6 +303,55 @@ RETURN:
 	WBHT_ASSERT(0 == front[-1] ? front - 1 == WBHT_PAGE(front + 1)->front : front - 1 > WBHT_PAGE(front + 1)->front);
 	if(sanity_check(front + 1)) { WBHT_PRINTF(stderr, "%s %s %d %ld %p %ld\n\n", __FUNCTION__, __FILE__, __LINE__, *front, front + 1, *back); pause(); } else WBHT_PRINTF(stderr, "%s\n", __FUNCTION__);
 #endif
+}
+
+static inline void* local_shrink(struct thread* thread, int64_t* front, int64_t* back, int64_t size)
+{
+	int64_t delta = *front + size;
+	WBHT_ASSERT(0 > *front && 0 > *back && *front == *back);
+	WBHT_ASSERT(0 > delta);
+	delta *= (-1);
+	if(HEAP_LIMIT < front[-1])
+	{
+		int64_t* adjacent = front - front[-1];
+		front += delta;
+		front[-1] = *adjacent + delta;
+		heap_increase((struct heap*)adjacent, front[-1]);
+	}
+	else
+	if(0 < front[-1])
+	{
+		int64_t* adjacent = front - front[-1];
+		if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+		front += delta;
+		front[-1] = *adjacent + delta;
+		if(HEAP_LIMIT < front[-1])
+			thread->root = heap_insert(thread->root, (struct heap*)adjacent, front[-1]);
+		else
+		{
+			*adjacent = front[-1];
+			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+		}
+	}
+	else
+	{
+		int64_t* adjacent = front;
+		front += delta;
+		front[-1] = delta;
+		if(HEAP_LIMIT < front[-1])
+			thread->root = heap_insert(thread->root, (struct heap*)adjacent, delta);
+		else
+		{
+			*adjacent = delta;
+			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+		}
+	}
+	*back += delta;
+	*front = *back;
+#ifndef __OPTIMIZE__
+	if(sanity_check(front + 1)) { WBHT_PRINTF(stderr, "%s %s %d %ld %p %ld\n\n", __FUNCTION__, __FILE__, __LINE__, *front, front + 1, *back); pause(); } else WBHT_PRINTF(stderr, "%s\n", __FUNCTION__);
+#endif
+	return (void*)(front + 1);
 }
 
 static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t* back, int64_t size)
@@ -379,12 +381,15 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 					thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
 					back += delta;
 					back[1] = *adjacent;
+					if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 				}
 			}
 			else
 			{
+				if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 				back += delta;
 				back[1] = *adjacent;
+				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
 			}
 		}
 		else
@@ -392,6 +397,8 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 		{
 			if(HEAP_LIMIT < delta)
 				thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
+			else
+				if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 			back += delta;
 		}
 		else
@@ -402,7 +409,7 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 	else
 	if(0 > delta)
 	{
-		delta *= -1;
+		delta *= (-1);
 		if(HEAP_LIMIT < back[1])
 		{
 			int64_t* adjacent = back + back[1];
@@ -421,12 +428,16 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 		if(0 < back[1])
 		{
 			int64_t* adjacent = back + back[1];
+			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
 			*adjacent += delta;
 			back -= delta;
 			if(HEAP_LIMIT < *adjacent)
 				thread->root = heap_insert(thread->root, (struct heap*)(back + 1), *adjacent);
 			else
+			{
 				back[1] = *adjacent;
+				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
+			}
 			*front += delta;
 			*back = *front;
 		}
@@ -440,7 +451,10 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 			if(HEAP_LIMIT < delta)
 				thread->root = heap_insert(thread->root, (struct heap*)(back + 1), delta);
 			else
+			{
 				back[1] = delta;
+				if(LINK_LIMIT <= back[1]) link_insert((struct link*)(back + 1 + 1), &thread->list[INDEX(back[1])].tail);
+			}	
 		}
 	}
 #ifndef __OPTIMIZE__
@@ -451,56 +465,111 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 
 static inline struct page* local_page(struct thread* thread, size_t align)
 {
-	uint64_t addr;
-	uint64_t length;
-	uint64_t page;
+	for(;;)
+	{
+		struct page* page;
+		size_t length;
+		size_t addr = thread->addr + PAGE_SIZE + WBHT_ALIGN - 1 & ~(WBHT_ALIGN - 1);
+		void* ptr;
 
-	if(align < WBHT_ALIGN)
-		align = WBHT_ALIGN;
-
-	length = WBHT_LENGTH + align;
-	if(MAP_FAILED == (void*)(addr = (size_t)mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
-	{
-		errno = ENOMEM;
-		return NULL;
+		if(PAGE_SIZE <= addr - thread->addr && addr <= thread->addr + thread->length)
+		{
+			page = (struct page*)(addr - PAGE_SIZE);
+			addr = (size_t)page + WBHT_LENGTH;
+			if(addr <= thread->addr + thread->length)
+			{
+				if(thread->addr < (size_t)page)
+				{
+					length = (size_t)page - thread->addr;
+					WBHT_ASSERT(0 == munmap((void*)thread->addr, length));
+				}
+				WBHT_ASSERT(0 == mprotect((void*)page, WBHT_LENGTH, PROT_READ|PROT_WRITE));
+				length = addr - thread->addr;
+				thread->addr += length;
+				thread->length -= length;
+				((struct page*)page)->thread = thread;
+				((struct page*)page)->next = MAP_FAILED;
+				thread->reference++;
+				return (struct page*)page;
+			}
+		}
+		if(0 < thread->length)
+			WBHT_ASSERT(0 == munmap((void*)thread->addr, thread->length));
+		length = PAGE_SIZE * 1024;
+		if(MAP_FAILED == (ptr = mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
+		{
+			thread->length = 0;
+			errno = ENOMEM;
+			WBHT_PRINTF(stderr, "ENOMEM %lu %s %d\n", size, __FILE__, __LINE__);
+			return NULL;
+		}
+		else
+		{
+			thread->addr = (size_t)ptr;
+			thread->length = length;
+		}
 	}
-	page = addr + PAGE_SIZE;
-	page += align - 1;
-	page &= UINT64_MAX - (align - 1);
-	page -= PAGE_SIZE;
-	if(addr < page)
-	{
-		uint64_t delta = page - addr;
-		WBHT_ASSERT(0 == munmap((void*)addr, delta));
-		length -= delta;
-	}
-	addr = page + WBHT_LENGTH;
-	if(addr < page + length)
-	{
-		uint64_t delta = page + length - addr;
-		WBHT_ASSERT(0 == munmap((void*)addr, delta));
-		length -= delta;
-	}
-	WBHT_ASSERT(0 == mprotect((void*)page, length, PROT_READ|PROT_WRITE));
-	((struct page*)page)->thread = thread;
-	thread->reference++;
-	return (struct page*)page;
+	errno = ENOMEM;
+	WBHT_PRINTF(stderr, "ENOMEM %lu %s %d\n", size, __FILE__, __LINE__);
+	return NULL;
 }
 
 static inline void* local_alloc(struct thread* thread, int64_t size)
 {
-	struct heap* heap = heap_first_fit(thread->root, size);
+	struct heap* heap;
 	int64_t* front;
 	int64_t* back;
 #ifndef __OPTIMIZE__
 	WBHT_ASSERT(NULL == thread->root || 0 == sanity_check(thread->root->size + 1));
 #endif
+	if(HEAP_LIMIT >= size)
+	{
+		int index;
+		struct list* list;
+		if(LINK_LIMIT <= size)
+		{
+			index = INDEX(size);
+			list = thread->list + index;
+			if(list->head.next != &list->tail)
+			{
+				struct link* link = list->head.next;
+				link_remove(link);
+				front = ((int64_t*)link) - 1;
+				back = front + *front - 1;
+				*front *= (-1);
+				*back = *front;
+				return (void*)(front + 1);
+			}
+		}
+		else
+			index = -1;
+		for(index++; index < sizeof(thread->list) / sizeof(*thread->list); index++)
+		{
+			struct list* list = thread->list + index;
+			if(list->head.next != &list->tail)
+			{
+				struct link* link = list->head.next;
+				link_remove(link);
+				front = ((int64_t*)link) - 1;
+				back = front + *front - 1;
+				*front -= size;
+				if(LINK_LIMIT <= *front) link_insert((struct link*)(front + 1), &thread->list[INDEX(*front)].tail);
+				front = back + 1 - size;
+				front[-1] = *back - size;
+				*front = (-1) * size;
+				*back = *front;
+				return (void*)(front + 1);
+			}
+		}
+	}
+	heap = heap_first_fit(thread->root, size);
 	if(NULL == heap)
 	{
 		struct page* page = local_page(thread, sizeof(void*)); 
 		if(NULL == page)
 		{
 			errno = ENOMEM;
+			WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
 			return NULL;
 		}
 		heap = (struct heap*)(page->front + 1);
@@ -514,7 +583,7 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 	{
 		thread->root = heap_remove(thread->root, heap);
 		front = heap->size;
-		*back *= -1;
+		*back *= (-1);
 		*front = *back;
 	}
 	else
@@ -526,10 +595,11 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 		{
 			thread->root = heap_remove(thread->root, heap);
 			*heap->size = delta;
+			if(LINK_LIMIT <= *heap->size) link_insert((struct link*)(heap->size + 1), &thread->list[INDEX(*heap->size)].tail);
 		}
 		front = heap->size + delta;
 		front[-1] = delta;
-		*front = -1 * size;
+		*front = (-1) * size;
 		*back = *front;
 	}
 #ifndef __OPTIMIZE__
@@ -550,7 +620,7 @@ static void* wbht_map(size_t alignment, size_t size)
 	uint64_t length;
 	uint64_t align = WBHT_ALIGN < alignment ? alignment : WBHT_ALIGN;
 	uint64_t page;
-	void* ptr;
+	int64_t* front; 
 
 	length = PAGE_SIZE + size + align - 1;
 	length += PAGE_SIZE - 1;
@@ -559,6 +629,7 @@ static void* wbht_map(size_t alignment, size_t size)
 	if(MAP_FAILED == (void*)(addr = (size_t)mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
 	{
 		errno = ENOMEM;
+		WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
 		return NULL;
 	}
 	page = addr + PAGE_SIZE;
@@ -575,7 +646,8 @@ static void* wbht_map(size_t alignment, size_t size)
 	addr = (size_t)(((struct page*)page)->front + 1);
 	addr += alignment - 1;
 	addr &= ~(alignment - 1);
-	ptr = (void*)addr;
+	front = (void*)addr;
+	front--;
 
 	addr += size;
 	addr += PAGE_SIZE - 1;
@@ -593,63 +665,233 @@ static void* wbht_map(size_t alignment, size_t size)
 		WBHT_ASSERT(0 == length % PAGE_SIZE);
 		WBHT_ASSERT(0 == munmap((void*)page, length));
 		errno = ENOMEM;
+		WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
 		return NULL;
 	}
-	((int64_t*)ptr)[-1] = -1 * (int64_t)((page + size - (uint64_t)ptr - sizeof(int64_t)) / sizeof(int64_t));
-	*((struct page*)page)->front = -1 * (int64_t)((length - sizeof(struct thread*)) / sizeof(int64_t));
-	return ptr;
+	*front = (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(int64_t);
+	*front *= (-1);
+	*((struct page*)page)->front = (addr - (size_t)((struct page*)page)->front) / sizeof(int64_t);
+	*((struct page*)page)->front *= (-1);
+	return front + 1;
+}
+
+static inline void* local_coalesce(struct thread* thread, int64_t* front, int64_t* back, int64_t size)
+{
+	size_t delta = (-1) * *front;
+	int64_t* adjacent;
+
+	if(size < delta)
+		return local_shrink(thread, front, back, size);
+	if(0 < back[1])
+		delta += back[1];
+	if(size <= delta)
+		return local_realloc(thread, front, back, size);
+	if(0 < front[-1])
+		delta += front[-1];
+	if(delta < size)
+	{
+		local_free(thread, front, back);
+		return NULL;
+	}
+	else
+	if(delta > size)
+	{
+		delta -= size;
+		adjacent = front - front[-1];
+		if(HEAP_LIMIT < front[-1])
+		{
+			if(HEAP_LIMIT < delta)
+				heap_decrease((struct heap*)adjacent, delta);
+			else
+			{
+				thread->root = heap_remove(thread->root, (struct heap*)adjacent);
+				*adjacent = delta;
+				if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+			}
+		}
+		else
+		{
+			if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+			*adjacent = delta;
+			if(LINK_LIMIT <= *adjacent) link_insert((struct link*)(adjacent + 1), &thread->list[INDEX(*adjacent)].tail);
+		}
+		front = adjacent + delta;
+		front[-1] = delta;
+		if(HEAP_LIMIT < back[1])
+		{
+			adjacent = back + back[1];
+			thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
+			back = adjacent;
+		}
+		else
+		if(0 < back[1])
+		{
+			adjacent = back + back[1];
+			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			back = adjacent;
+		}
+	}
+	else
+	{
+		adjacent = front - front[-1];
+		if(HEAP_LIMIT < *adjacent)
+			thread->root = heap_remove(thread->root, (struct heap*)adjacent);
+		else
+			if(LINK_LIMIT <= *adjacent) link_remove((struct link*)(adjacent + 1));
+		front = adjacent;
+		if(HEAP_LIMIT < back[1])
+		{
+			adjacent = back + back[1];
+			thread->root = heap_remove(thread->root, (struct heap*)(back + 1));
+			back = adjacent;
+		}
+		else
+		if(0 < back[1])
+		{
+			adjacent = back + back[1];
+			if(LINK_LIMIT <= back[1]) link_remove((struct link*)(back + 1 + 1));
+			back = adjacent;
+		}
+	}
+	*front = (-1) * size;
+	*back = *front;
+	return (void*)(front + 1);
 }
 
 WEAK void* wbht_malloc(size_t size)
 {
-	struct thread* thread = (local) ? local : thread_initial(&local);
-	if(unlikely(thread->free))
+	struct thread* thread = (thread = pthread_getspecific(key)) ? thread : thread_initial(NULL);
+	struct thread* remote;
+	void** free;
+	struct page* page;
+	size += sizeof(__int128) - 1;
+	size &= ~(sizeof(__int128) - 1);
+
+	if(unlikely(page = thread->local))
 	{
-		void** free;
 		if((free = thread->free))
 		{
 			int64_t* front; 
 			int64_t* back;
+			void* ptr;
 			thread->free = (void**)*free;
 			front = ((int64_t*)free) - 1;
-			back = front - *front - 1;
-			local_free(thread, front, back);
-		}
-		if((free = thread->free))
-		{
-			int64_t* front; 
-			int64_t* back;
-			thread->free = (void**)*free;
-			front = ((int64_t*)free) - 1;
-			back = front - *front - 1;
-			if(0 < size && local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
-				return (void*)free;
+			if((back = boundary(front, __FILE__, __LINE__)))
+			{
+				if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+				{
+					if((free = thread->free))
+					{	
+						thread->free = (void**)*free;
+						front = ((int64_t*)free) - 1;
+						if((back = boundary(front, __FILE__, __LINE__)))
+						{
+							local_free(thread, front, back);
+							if(0 == thread->reference)
+							{	
+								destructor(thread);
+								pthread_setspecific(key, NULL);
+							}
+						}
+					}
+					return ptr;
+				}
+				else			
+				if((free = thread->free))
+				{
+					thread->free = (void**)*free;
+					front = ((int64_t*)free) - 1;
+					if((back = boundary(front, __FILE__, __LINE__)))
+					{
+						if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+							return ptr;
+						else
+						if(0 == thread->reference)
+						{
+							if((remote = channel[thread->polling].thread))
+							{
+								__atomic_thread_fence(__ATOMIC_ACQUIRE);
+								if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+								{
+									destructor(thread);
+									pthread_setspecific(key, remote);
+								}
+							}
+							else
+								thread->polling = (thread->polling + 1) % nprocs;
+						}
+					}
+				}
+				else
+				if(0 == thread->reference)
+				{
+					if((remote = channel[thread->polling].thread))
+					{
+						__atomic_thread_fence(__ATOMIC_ACQUIRE);
+						if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+						{
+							destructor(thread);
+							pthread_setspecific(key, remote);
+						}
+					}
+					else
+						thread->polling = (thread->polling + 1) % nprocs;
+				}
+			}
 			else
-				local_free(thread, front, back);
+			if((free = thread->free))
+			{
+				thread->free = (void**)*free;
+				front = ((int64_t*)free) - 1;
+				if((back = boundary(front, __FILE__, __LINE__)))
+				{
+					if(ptr = local_coalesce(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+						return ptr;
+					else
+					if(0 == thread->reference)
+					{
+						if((remote = channel[thread->polling].thread))
+						{
+							__atomic_thread_fence(__ATOMIC_ACQUIRE);
+							if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+							{
+								destructor(thread);
+								pthread_setspecific(key, remote);
+							}
+						}
+						else
+							thread->polling = (thread->polling + 1) % nprocs;
+					}
+				}
+			}
 		}
-	}
-	else
-	if(unlikely(thread->channel[thread->polling].free))
-	{
-		void** free;
-		if((free = (void**)thread->channel[thread->polling].free) 
-		&& __sync_bool_compare_and_swap(&thread->channel[thread->polling].free, free, NULL))
+		else
+		if(free = page->free)
 		{
-			__atomic_thread_fence(__ATOMIC_ACQUIRE);
-			thread->free = free;
+			if(__sync_bool_compare_and_swap(&page->free, free, NULL))
+			{
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				thread->free = free;
+			}
+		}
+		else
+		{
+			page->next = MAP_FAILED;
+			thread->local = NULL;
 		}
 	}
 	else
+	if(unlikely(page = thread->remote))
 	{
-		thread->polling++;
-		thread->polling %= nprocs;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+			thread->local = page;
 	}
+
 	if(WBHT_LIMIT < size)
-		return wbht_map(sizeof(void*), size);
+		return wbht_map(sizeof(__int128), size);
 	else
-	if(0 < size)
-		return local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*));
-	return NULL;
+		return local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*));
 }
 
 WEAK void* wbht_calloc(size_t nmemb, size_t size)
@@ -663,196 +905,185 @@ WEAK void* wbht_calloc(size_t nmemb, size_t size)
 	return NULL;
 }
 
-static inline int64_t* boundary(int64_t* front, const char* file, int line)
+static inline void remote_free(struct thread* thread, struct page* page, void* ptr)
 {
-	int64_t* back;
-#ifdef __OPTIMIZE__
-	if(-1 * ((WBHT_LENGTH / sizeof(void*)) - 3) > *front)
+	do
 	{
-		WBHT_PRINTF(stderr, "%p corruption %ld %s %d\n", front + 1, *front, file, line);
-		return NULL;
-	}
-#endif
-	back = front - *front - 1;
-#ifdef __OPTIMIZE__
-	if(0 <= *back || *front != *back)
-	{
-		WBHT_PRINTF(stderr, "%p corruption %ld %ld %s %d\n", front + 1, *front, *back, file, line);
-		return NULL;
-	}
-#endif
-	return back;
+		void** free = (void**)ptr;
+		*free = page->free;
+		__atomic_thread_fence(__ATOMIC_RELEASE);
+		if(__sync_bool_compare_and_swap(&page->free, *free, free))
+		{
+			if(MAP_FAILED == page->next
+			&& __sync_bool_compare_and_swap(&page->next, MAP_FAILED, NULL))
+				do
+				{
+					page->next = thread->remote;
+					__atomic_thread_fence(__ATOMIC_RELEASE);
+					if(__sync_bool_compare_and_swap(&thread->remote, page->next, page))
+						return;
+				} while(0 == sched_yield());
+			else
+				return;
+		}
+	} while(0 == sched_yield());
 }
 
 WEAK void wbht_free(void* ptr)
 {
-	struct thread* thread;
-	int64_t* front; 
-	int64_t* back;
-	void** free;
-	if((thread = local))
+	if((ptr))
 	{
-		if(unlikely(thread->free))
+		struct thread* thread;
+		struct page* page;
+		struct thread* remote;
+		int64_t* front; 
+		int64_t* back;
+		void** free;
+
+		page = WBHT_PAGE(ptr);
+		remote = page->thread;	
+		front = ((int64_t*)ptr) - 1;
+
+		if((thread = pthread_getspecific(key)))
 		{
-			if((free = thread->free))
+			if(remote == thread)
 			{
-				thread->free = (void**)*free;
-				front = ((int64_t*)free) - 1;
-				back = front - *front - 1;
-				local_free(thread, front, back);
-			}
-			if((ptr))
-			{
-				struct page* page = WBHT_PAGE(ptr);
-				struct thread* remote = page->thread;
-				front = ((int64_t*)ptr) - 1;
-				if(remote == thread)
+				if((back = boundary(front, __FILE__, __LINE__)))
 				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						local_free(thread, front, back);
+					local_free(thread, front, back);
+					if(0 == thread->reference)
+					{
+						destructor(thread);
+						pthread_setspecific(key, NULL);
+					}
+					else
+					if(unlikely(page = thread->local))
+					{
+						if((free = thread->free))
+						{
+							int64_t* front; 
+							int64_t* back;
+							void* ptr;
+							thread->free = (void**)*free;
+							front = ((int64_t*)free) - 1;
+							back = front - *front - 1;
+							local_free(thread, front, back);
+							if(0 == thread->reference)
+							{
+								destructor(thread);
+								pthread_setspecific(key, NULL);
+							}
+						}
+						else
+						if(free = page->free)
+						{
+							if(__sync_bool_compare_and_swap(&page->free, free, NULL))
+							{
+								__atomic_thread_fence(__ATOMIC_ACQUIRE);
+								thread->free = free;
+							}
+						}
+						else
+						{
+							page->next = MAP_FAILED;
+							thread->local = NULL;
+						}
+					}
+					else
+					if(unlikely(page = thread->remote))
+					{
+						__atomic_thread_fence(__ATOMIC_ACQUIRE);
+						if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+							thread->local = page;
+					}
 				}
-				else
-				if((remote))
+			}
+			else
+			if((remote))
+			{
+				if((back = boundary(front, __FILE__, __LINE__)))
+					remote_free(remote, page, ptr);
+
+				if(unlikely(page = thread->local))
 				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						remote_free(remote, ptr);
 					if((free = thread->free))
 					{
+						int64_t* front; 
+						int64_t* back;
+						void* ptr;
 						thread->free = (void**)*free;
 						front = ((int64_t*)free) - 1;
 						back = front - *front - 1;
 						local_free(thread, front, back);
-					}
-				}
-				else
-				{
-					size_t length = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-					WBHT_ASSERT(0 == length % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, length));
-				}
-			}
-		}
-		else
-		if(unlikely(thread->channel[thread->polling].free))
-		{
-			if((free = (void**)thread->channel[thread->polling].free) 
-			&& __sync_bool_compare_and_swap(&thread->channel[thread->polling].free, free, NULL))
-			{
-				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				thread->free = free;
-			}
-			if((ptr))
-			{
-				struct page* page = WBHT_PAGE(ptr);
-				struct thread* remote = page->thread;
-				front = ((int64_t*)ptr) - 1;
-				if(remote == thread)
-				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						local_free(thread, front, back);
-				}
-				else
-				if((remote))
-				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						remote_free(remote, ptr);
-				}
-				else
-				{
-					size_t length = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-					WBHT_ASSERT(0 == length % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, length));
-				}
-			}
-		}
-		else
-		{
-			if((ptr))
-			{
-				struct page* page = WBHT_PAGE(ptr);
-				struct thread* remote = page->thread;
-				front = ((int64_t*)ptr) - 1;
-				if(remote == thread)
-				{
-					if((back = boundary(front, __FILE__, __LINE__)))
-						local_free(thread, front, back);
-				}
-				else
-				if((remote))
-				{
-					register unsigned i, j;
-					if((back = boundary(front, __FILE__, __LINE__)))
-						remote_free(remote, ptr);
-					i = scan;
-					i %= nprocs;
-					j = thread->polling;
-					if((remote = channel[i].thread) && remote->channel[j].free)
-					{
-						__atomic_thread_fence(__ATOMIC_ACQUIRE);
-						if(__sync_bool_compare_and_swap(&channel[i].thread, remote, remote->next))
+						if(0 == thread->reference)
 						{
-							destructor(&local);
-							remote->polling = j;
-							local = remote;
-							scan++;
-							return;
+							destructor(thread);
+							pthread_setspecific(key, NULL);
 						}
 					}
+					else
+					if(free = page->free)
+					{
+						if(__sync_bool_compare_and_swap(&page->free, free, NULL))
+						{
+							__atomic_thread_fence(__ATOMIC_ACQUIRE);
+							thread->free = free;
+						}
+					}
+					else
+					{
+						page->next = MAP_FAILED;
+						thread->local = NULL;
+					}
 				}
 				else
+				if(unlikely(page = thread->remote))
 				{
-					size_t length = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-					WBHT_ASSERT(0 == length % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, length));
+					__atomic_thread_fence(__ATOMIC_ACQUIRE);
+					if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+						thread->local = page;
 				}
-			}
-			thread->polling++;
-			if(nprocs <= thread->polling)
-			{
-				thread->polling = 0;
-				scan++;
-			}
-		}
-	}
-	else
-	if((ptr))
-	{
-		struct page* page = WBHT_PAGE(ptr);
-		struct thread* remote = page->thread;
-		front = ((int64_t*)ptr) - 1;
-		if((remote))
-		{
-			register unsigned i, j;
-			if((back = boundary(front, __FILE__, __LINE__)))
-				remote_free(remote, ptr);
-			i = scan;
-			i %= nprocs;
-			j = polling;
-			j %= nprocs;
-			if((remote = channel[i].thread) && (remote->channel[j].free))
-			{
-				__atomic_thread_fence(__ATOMIC_ACQUIRE);
-				if(__sync_bool_compare_and_swap(&channel[i].thread, remote, remote->next))
+				else
+				if((remote = channel[thread->polling].thread) && (remote->remote))
 				{
-					if(NULL == pthread_getspecific(key))
-						pthread_setspecific(key, (const void*)&local);
-					remote->polling = j;
-					local = remote;
-					scan++;
-					return; 
+					__atomic_thread_fence(__ATOMIC_ACQUIRE);
+					if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+					{
+						destructor(thread);
+						pthread_setspecific(key, remote);
+					}
 				}
+				else
+					thread->polling = (thread->polling + 1) % nprocs;
 			}
-			if(nprocs <= polling)
+			else
 			{
-				polling = 0;
-				scan++;
+				WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+				WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
 			}
 		}
 		else
 		{
-			size_t length = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-			WBHT_ASSERT(0 == length % PAGE_SIZE);
-			WBHT_ASSERT(0 == munmap(page, length));
+			if((remote))
+			{
+				int index = polling;
+				if((back = boundary(front, __FILE__, __LINE__)))
+					remote_free(remote, page, ptr);
+
+				if((remote = channel[index].thread) && (remote->remote))
+				{
+					__atomic_thread_fence(__ATOMIC_ACQUIRE);
+					if(__sync_bool_compare_and_swap(&channel[index].thread, remote, remote->next))
+						pthread_setspecific(key, remote);
+				}
+				else
+					polling = (index + 1) % nprocs;
+			}
+			else
+			{
+				WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+				WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
+			}
 		}
 	}
 }
@@ -863,119 +1094,310 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 	{
 		if(0 < size)
 		{
-			struct thread* thread = (local) ? local : thread_initial(&local);
-			struct page* page = WBHT_PAGE(ptr);
+			struct thread* thread = (thread = pthread_getspecific(key)) ? thread : thread_initial(NULL);
+			struct thread* remote;
+			struct page* page;
 			void* dst;
 			size_t n;
 			int64_t* front; 
 			int64_t* back;
-			if(unlikely(thread->free))
+			void** free;
+
+			if(unlikely(page = thread->local))
 			{
-				void** free;
 				if((free = thread->free))
 				{
+					int64_t* front; 
+					int64_t* back;
+					void* ptr;
 					thread->free = (void**)*free;
 					front = ((int64_t*)free) - 1;
-					back = front - *front - 1;
-					local_free(thread, front, back);
-				}
-			}
-			else
-			if(unlikely(thread->channel[thread->polling].free))
-			{
-				void** free;
-				if((free = (void**)thread->channel[thread->polling].free) 
-				&& __sync_bool_compare_and_swap(&thread->channel[thread->polling].free, free, NULL))
-				{
-					__atomic_thread_fence(__ATOMIC_ACQUIRE);
-					thread->free = free;
-				}
-			}
-			else
-			{
-				thread->polling++;
-				thread->polling %= nprocs;
-			}			
-			front = ((int64_t*)ptr) - 1;
-			if(page->thread == thread)
-			{
-				back = front - *front - 1;
-				if(WBHT_LIMIT < size)
-				{
-					if(dst = wbht_map(sizeof(void*), size))
+					if((back = boundary(front, __FILE__, __LINE__)))
 					{
-						n = -1 * *front * sizeof(void*);
-						if(n > size)
-							n = size;
-						memcpy(dst, ptr, n);
 						local_free(thread, front, back);
-						return dst;
+						if(0 == thread->reference)
+						{
+							if((remote = channel[thread->polling].thread))
+							{
+								__atomic_thread_fence(__ATOMIC_ACQUIRE);
+								if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+								{
+									destructor(thread);
+									pthread_setspecific(key, remote);
+								}
+							}
+							else
+								thread->polling = (thread->polling + 1) % nprocs;
+						}
 					}
-					else
+				}
+				else
+				if(free = page->free)
+				{
+					if(__sync_bool_compare_and_swap(&page->free, free, NULL))
 					{
-						local_free(thread, front, back);
-						return NULL;
+						__atomic_thread_fence(__ATOMIC_ACQUIRE);
+						thread->free = free;
 					}
 				}
 				else
 				{
-					if(local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
-						return ptr;
-					else
+					page->next = MAP_FAILED;
+					thread->local = NULL;
+				}
+			}
+			else
+			if(unlikely(page = thread->remote))
+			{
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+					thread->local = page;
+			}
+
+			page = WBHT_PAGE(ptr);
+			size += sizeof(__int128) - 1;
+			size &= ~(sizeof(__int128) - 1);
+			front = ((int64_t*)ptr) - 1;
+			if(page->thread == thread)
+			{
+				if((back = boundary(front, __FILE__, __LINE__)))
+				{
+					if(WBHT_LIMIT < size)
 					{
-						if(dst = local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
+						if(dst = wbht_map(sizeof(__int128), size))
 						{
-							n = -1 * *front * sizeof(void*);
+							n = (-1 * *front - 2) * sizeof(void*);
 							if(n > size)
 								n = size;
 							memcpy(dst, ptr, n);
-							remote_free(page->thread, ptr);
+							local_free(thread, front, back);
 							return dst;
 						}
 						else
-						{
-							remote_free(page->thread, ptr);
 							return NULL;
+					}
+					else
+					{
+						if(local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+							return ptr;
+						else
+						{
+							if(dst = local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+							{
+								n = ((-1) * *front - 2) * sizeof(void*);
+								if(n > size)
+									n = size;
+								memcpy(dst, ptr, n);
+								local_free(thread, front, back);
+								return dst;
+							}
+							else
+								return NULL;
 						}
 					}
+				}
+				else
+				{
+					errno = EINVAL;
+					return NULL;
 				}
 			}
 			else
 			if((page->thread))
 			{
-				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
+				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(__int128), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
-					remote_free(page->thread, ptr);
+					if((back = boundary(front, __FILE__, __LINE__)))
+						remote_free(page->thread, page, ptr);
+					return dst;
+				}
+				else
+					return NULL;
+			}
+			else
+			{
+				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(__int128), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+				{
+					n = (-1 * *front - 2) * sizeof(void*);
+					if(n > size)
+						n = size;
+					memcpy(dst, ptr, n);
+					WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+					WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
+					return dst;
+				}
+				else
+					return NULL;
+			}
+		}
+		else
+			wbht_free(ptr);
+	}
+	else
+		return wbht_malloc(size);
+	return NULL;
+}
+
+WEAK void* wbht_reallocf(void *ptr, size_t size)
+{
+	if(ptr)
+	{
+		if(0 < size)
+		{
+			struct thread* thread = (thread = pthread_getspecific(key)) ? thread : thread_initial(NULL);
+			struct thread* remote;
+			struct page* page;
+			void* dst;
+			size_t n;
+			int64_t* front; 
+			int64_t* back;
+			void** free;
+
+			if(unlikely(page = thread->local))
+			{
+				if((free = thread->free))
+				{
+					int64_t* front; 
+					int64_t* back;
+					void* ptr;
+					thread->free = (void**)*free;
+					front = ((int64_t*)free) - 1;
+					if((back = boundary(front, __FILE__, __LINE__)))
+					{
+						local_free(thread, front, back);
+						if(0 == thread->reference)
+						{
+							if((remote = channel[thread->polling].thread))
+							{
+								__atomic_thread_fence(__ATOMIC_ACQUIRE);
+								if(__sync_bool_compare_and_swap(&channel[thread->polling].thread, remote, remote->next))
+								{
+									destructor(thread);
+									pthread_setspecific(key, remote);
+								}
+							}
+							else
+								thread->polling = (thread->polling + 1) % nprocs;
+						}
+					}	
+				}
+				else
+				if(free = page->free)
+				{
+					if(__sync_bool_compare_and_swap(&page->free, free, NULL))
+					{
+						__atomic_thread_fence(__ATOMIC_ACQUIRE);
+						thread->free = free;
+					}
+				}
+				else
+				{
+					page->next = MAP_FAILED;
+					thread->local = NULL;
+				}
+			}
+			else
+			if(unlikely(page = thread->remote))
+			{
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				if(__sync_bool_compare_and_swap(&thread->remote, page, page->next))
+					thread->local = page;
+			}
+
+			page = WBHT_PAGE(ptr);
+			size += sizeof(__int128) - 1;
+			size &= ~(sizeof(__int128) - 1);
+			front = ((int64_t*)ptr) - 1;
+			if(page->thread == thread)
+			{
+				if((back = boundary(front, __FILE__, __LINE__)))
+				{
+					if(WBHT_LIMIT < size)
+					{
+						if(dst = wbht_map(sizeof(__int128), size))
+						{
+							n = (-1 * *front - 2) * sizeof(void*);
+							if(n > size)
+								n = size;
+							memcpy(dst, ptr, n);
+							local_free(thread, front, back);
+							return dst;
+						}
+						else
+						{
+							local_free(thread, front, back);
+							return NULL;
+						}
+					}
+					else
+					{
+						if(local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+							return ptr;
+						else
+						{
+							if(dst = local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+							{
+								n = (-1 * *front - 2) * sizeof(void*);
+								if(n > size)
+									n = size;
+								memcpy(dst, ptr, n);
+								local_free(thread, front, back);
+								return dst;
+							}
+							else
+							{
+								local_free(thread, front, back);
+								return NULL;
+							}
+						}
+					}
+				}
+				else
+				{
+					errno = EINVAL;
+					return NULL;
+				}
+			}
+			else
+			if((page->thread))
+			{
+				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(__int128), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
+				{
+					n = (-1 * *front - 2) * sizeof(void*);
+					if(n > size)
+						n = size;
+					memcpy(dst, ptr, n);
+					if((back = boundary(front, __FILE__, __LINE__)))
+						remote_free(page->thread, page, ptr);
 					return dst;
 				}
 				else
 				{
-					remote_free(page->thread, ptr);
+					if((back = boundary(front, __FILE__, __LINE__)))
+						remote_free(page->thread, page, ptr);
 					return NULL;
 				}
 			}
 			else
 			{
-				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(void*), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*)))
+				if(dst = WBHT_LIMIT < size ? wbht_map(sizeof(__int128), size) : local_alloc(thread, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*)))
 				{
-					n = -1 * *front * sizeof(void*);
+					n = (-1 * *front - 2) * sizeof(void*);
 					if(n > size)
 						n = size;
 					memcpy(dst, ptr, n);
-					n = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-					WBHT_ASSERT(0 == n % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, n));
+					WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+					WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
 					return dst;
 				}
 				else
 				{
-					size_t length = -1 * *page->front * sizeof(int64_t) + sizeof(struct thread*);
-					WBHT_ASSERT(0 == length % PAGE_SIZE);
-					WBHT_ASSERT(0 == munmap(page, length));
+					WBHT_ASSERT(0 == ((size_t)&page->front[-1 * *page->front] - (size_t)page) % PAGE_SIZE);
+					WBHT_ASSERT(0 == munmap(page, (size_t)&page->front[-1 * *page->front] - (size_t)page));
 					return NULL;
 				}
 			}
@@ -984,50 +1406,176 @@ WEAK void* wbht_realloc(void *ptr, size_t size)
 			wbht_free(ptr);
 	}
 	else
-	if(0 < size)
 		return wbht_malloc(size);
-	return NULL;
-}
-
-WEAK void* wbht_reallocf(void *ptr, size_t size)
-{
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
 	return NULL;
 }
 
 WEAK void *wbht_reallocarray(void *ptr, size_t nmemb, size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
+	if(0 < nmemb)
+	{
+		if(8 == sizeof(void*))
+		{
+			if(size >= (1UL << 48) / nmemb)
+			{
+				errno = EINVAL;
+				return NULL;
+			}
+		}
+		else
+		if(4 == sizeof(void*))
+		{
+			if(size >= (1UL << 31) / nmemb)
+			{
+				errno = EINVAL;
+				return NULL;
+			}
+		}
+	}
+	return wbht_realloc(ptr, nmemb * size);
 }
 
 WEAK void* wbht_aligned_alloc(size_t alignment, size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
+	void* memptr = NULL;
+	int ret;
+	switch(ret = wbht_posix_memalign(&memptr, alignment, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return memptr;
 }
 
 WEAK int wbht_posix_memalign(void **memptr, size_t alignment, size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return -1;
+	int ret = 0;
+	errno = 0;
+	if(0 == size)
+		*memptr = NULL;
+	else
+	if(sizeof(void*) > alignment)
+		ret = EINVAL;
+	else
+	if((alignment & (alignment - 1)))
+		ret = EINVAL;
+	else
+	{
+		struct thread* thread = (thread = pthread_getspecific(key)) ? thread : thread_initial(NULL);
+		size += sizeof(__int128) - 1;
+		size &= ~(sizeof(__int128) - 1);
+		if(WBHT_LIMIT < size)
+		{
+			void* ptr;
+			if((ptr = wbht_map(alignment, size)))
+				*memptr = ptr;
+			else
+			{
+				ret = ENOMEM;
+				WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
+			}
+		}
+		else
+		if(WBHT_LIMIT < alignment + size)
+		{
+			struct page* page = local_page(thread, alignment); 
+			if((page))
+			{
+				int64_t* front = page->front + 1;
+				int64_t* back = page->back - 1;
+				size_t addr = (size_t)(front + 1);
+				void* ptr = (void*)(addr + alignment - 1 & ~(alignment - 1));
+				*front = (-1) * (page->back - front);
+				*back = *front;
+				if(addr < (size_t)ptr)
+				{
+					front = ((int64_t*)addr) - 1;
+					back = front - *front - 1;
+					ptr = local_shrink(thread, front, back, (sizeof(int64_t) + alignment + size - ((size_t)ptr - addr) + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*));
+				}
+				front = ((int64_t*)ptr) - 1;
+				back = front - *front - 1;
+				*memptr = local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*));
+			}
+			else
+			{
+				ret = ENOMEM;
+				WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
+			}
+		}
+		else
+		{
+			size_t addr;
+			if((addr = (size_t)local_alloc(thread, (sizeof(int64_t) + alignment + size + sizeof(int64_t)) / sizeof(void*))))	
+			{	
+				void* ptr = (void*)(addr + alignment - 1 & ~(alignment - 1));
+				int64_t* front; 
+				int64_t* back;
+				if(addr < (size_t)ptr)
+				{
+					front = ((int64_t*)addr) - 1;
+					back = front - *front - 1;
+					ptr = local_shrink(thread, front, back, (sizeof(int64_t) + alignment + size - ((size_t)ptr - addr) + sizeof(void*) - 1 + sizeof(int64_t)) / sizeof(void*));
+				}
+				front = ((int64_t*)ptr) - 1;
+				back = boundary(front, __FILE__, __LINE__);
+				*memptr = local_realloc(thread, front, back, (sizeof(int64_t) + size + sizeof(int64_t)) / sizeof(void*));
+			}
+			else
+			{
+				ret = ENOMEM;
+				WBHT_PRINTF(stderr, "%s %d %s\n", __FILE__, __LINE__, __FUNCTION__);
+			}
+		}
+	}
+	return ret;
 }
 
 WEAK void* wbht_valloc(size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
+	void* memptr = NULL;
+	int ret;
+	switch(ret = wbht_posix_memalign(&memptr, PAGE_SIZE, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return memptr;
 }
 
 WEAK void* wbht_memalign(size_t alignment, size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
+	void* memptr = NULL;
+	int ret;
+	switch(ret = wbht_posix_memalign(&memptr, alignment, size))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return memptr;
 }
 
 WEAK void* wbht_pvalloc(size_t alignment, size_t size)
 {
-	WBHT_PRINTF(stderr, "%s to be implemented.\n", __FUNCTION__);
-	return NULL;
+	void* memptr = NULL;
+	int ret;
+	switch(ret = wbht_posix_memalign(&memptr, alignment, size + PAGE_SIZE - 1 & PAGE_MASK))
+	{
+	case 0:
+		return memptr;
+	default:
+		errno = ret;
+		break;
+	}
+	return memptr;
 }
 
