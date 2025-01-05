@@ -84,7 +84,7 @@ static inline void _thread_remote(struct thread* thread)
 			if(thread->btree)
 			{
 				btree = thread->btree;
-				thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+				heap_insert(&thread->root, &btree->heap, btree_key);
 			}
 			btree = thread->local;
 			thread->root = heap_remove(thread->root, &btree->heap);
@@ -271,7 +271,7 @@ static inline void* btff_alloc(struct thread* thread, int64_t size, int16_t delt
 	{
 		if(NULL == thread->root)
 		{
-			thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+			heap_insert(&thread->root, &btree->heap, btree_key);
 			thread->btree = NULL;
 			return btree_page(thread, sizeof(void*), size);
 		}
@@ -280,13 +280,13 @@ static inline void* btff_alloc(struct thread* thread, int64_t size, int16_t delt
 			struct heap* heap;
 			if(NULL == (heap = heap_first_fit(thread->root, size)))
 			{
-				thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+				heap_insert(&thread->root, &btree->heap, btree_key);
 				thread->btree = NULL;
 				return btree_page(thread, sizeof(void*), size);
 			}
 			else
 			{
-				thread->root = heap_insert(thread->root, &btree->heap, btree_key);
+				heap_insert(&thread->root, &btree->heap, btree_key);
 				thread->btree = btree = BTREE(heap);
 				thread->root = heap_remove(thread->root, heap);
 			}
