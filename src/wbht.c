@@ -29,7 +29,11 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
 #include "thread.h"
+#ifdef AVLHT
+#include "avl.h"
+#else
 #include "heap.h"
+#endif
 #include "page.h"
 #include "wbht.h"
 #include <sys/mman.h>
@@ -57,6 +61,42 @@ static unsigned scan;
 static uint8_t barrier_dial[sizeof(void*) * 15];
 static unsigned dial;
 #ifndef __OPTIMIZE__
+void heap_print(struct heap* node, int tab)
+{
+	assert(64 >= tab);
+	if((node))
+	{
+		int i;
+		char tmp[1];
+		size_t count;
+		switch(node->balance)
+		{
+		case -1:
+			assert(node->edge[HEAP_LEFT]);
+			break;
+		case 0:
+			assert((node->edge[HEAP_LEFT] && node->edge[HEAP_RIGHT]) || (!node->edge[HEAP_LEFT] && !node->edge[HEAP_RIGHT]));
+			break;
+		case 1:
+			assert(node->edge[HEAP_RIGHT]);
+			break;
+		default:
+			assert(0);
+			break;
+		}
+		heap_print(node->edge[HEAP_RIGHT], tab + 1);
+		for(i = 0; i < tab; i++) 
+			write(fileno(stderr), "  ", 2);
+		if(0 < (count = snprintf(tmp, sizeof(tmp), "%ld-%ld/%ld/%ld\n", node->size[HEAP_SIZE], node->balance, node->size[HEAP_LEFT], node->size[HEAP_RIGHT])))
+		{
+			char buf[count + 1];
+			if(count == snprintf(buf, sizeof(buf), "%ld-%ld/%ld/%ld\n", node->size[HEAP_SIZE], node->balance, node->size[HEAP_LEFT], node->size[HEAP_RIGHT]))
+				write(fileno(stderr), buf, count);
+		}
+		heap_print(node->edge[HEAP_LEFT], tab + 1);
+	}
+}
+
 static unsigned sanity_check(void* ptr)
 {
 	unsigned error = 1;
@@ -339,15 +379,18 @@ RETURN:
 			thread->root = heap_remove(root, (struct heap*)front);
 			WBHT_ASSERT(0 == munmap((void*)(front - 2), WBHT_LENGTH));
 			thread->reference--;
+			return;
 		}
 	}
 #ifndef __OPTIMIZE__
+	WBHT_ASSERT(NULL == thread->root || NULL == thread->root->edge[HEAP_PARENT]);
 	WBHT_ASSERT(NULL == thread->root || 0 < *thread->root->size);
 	WBHT_ASSERT(NULL == thread->root || INT64_MIN == thread->root->size[HEAP_LEFT] || 0 < thread->root->size[HEAP_LEFT]);
 	WBHT_ASSERT(NULL == thread->root || INT64_MIN == thread->root->size[HEAP_RIGHT] || 0 < thread->root->size[HEAP_RIGHT]);
 	WBHT_ASSERT(0 < *front && 0 < *back && *front == *back);
 	WBHT_ASSERT(0 == back[1] ? back + 1 == WBHT_PAGE(front + 1)->back : back + 1 < WBHT_PAGE(front + 1)->back);
 	WBHT_ASSERT(0 == front[-1] ? front - 1 == WBHT_PAGE(front + 1)->front : front - 1 > WBHT_PAGE(front + 1)->front);
+	heap_print(thread->root, 0);
 	if(sanity_check(front + 1)) { WBHT_PRINTF(stderr, "%s %s %d %ld %p %ld\n\n", __FUNCTION__, __FILE__, __LINE__, *front, front + 1, *back); pause(); } else WBHT_PRINTF(stderr, "%s\n", __FUNCTION__);
 #endif
 }
@@ -444,6 +487,8 @@ static inline void* local_realloc(struct thread* thread, int64_t* front, int64_t
 		}
 	}
 #ifndef __OPTIMIZE__
+	heap_print(thread->root, 0);
+	WBHT_ASSERT(NULL == thread->root || NULL == thread->root->edge[HEAP_PARENT]);
 	if(sanity_check(front + 1)) { WBHT_PRINTF(stderr, "%s %s %d %ld %p %ld\n\n", __FUNCTION__, __FILE__, __LINE__, *front, front + 1, *back); pause(); } else WBHT_PRINTF(stderr, "%s\n", __FUNCTION__);
 #endif
 	return (void*)(front + 1);
@@ -493,7 +538,7 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 	int64_t* front;
 	int64_t* back;
 #ifndef __OPTIMIZE__
-	WBHT_ASSERT(NULL == thread->root || 0 == sanity_check(thread->root->size + 1));
+	WBHT_ASSERT(NULL == thread->root || NULL == thread->root->edge[HEAP_PARENT]);
 #endif
 	if(NULL == heap)
 	{
@@ -533,6 +578,7 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 		*back = *front;
 	}
 #ifndef __OPTIMIZE__
+	heap_print(thread->root, 0);
 	WBHT_ASSERT(NULL == thread->root || 0 < *thread->root->size);
 	WBHT_ASSERT(NULL == thread->root || INT64_MIN == thread->root->size[HEAP_LEFT] || 0 < thread->root->size[HEAP_LEFT]);
 	WBHT_ASSERT(NULL == thread->root || INT64_MIN == thread->root->size[HEAP_RIGHT] || 0 < thread->root->size[HEAP_RIGHT]);
@@ -540,6 +586,7 @@ static inline void* local_alloc(struct thread* thread, int64_t size)
 	WBHT_ASSERT(0 == back[1] ? back + 1 == WBHT_PAGE(front + 1)->back : back + 1 < WBHT_PAGE(front + 1)->back);
 	WBHT_ASSERT(0 == front[-1] ? front - 1 == WBHT_PAGE(front + 1)->front : front - 1 > WBHT_PAGE(front + 1)->front);
 	if(sanity_check(front + 1)) { WBHT_PRINTF(stderr, "%s %s %d %ld %p %ld\n\n", __FUNCTION__, __FILE__, __LINE__, *heap->size, heap->size + 1, *back); pause(); } else WBHT_PRINTF(stderr, "%s\n", __FUNCTION__);
+	memset((void*)(front + 1), 0, sizeof(int64_t) * ((-1 * *front) - 2));
 #endif
 	return (void*)(front + 1);
 }

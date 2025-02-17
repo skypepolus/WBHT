@@ -29,18 +29,27 @@
 #
 CC=gcc
 CXX=g++
-CFLAGS=-Iinc -fPIC -O3
+CFLAGS=-Iinc -fPIC -Ofast
 LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
 AR=ar
 
 .PHONY: lib
-lib: lib/libwbht.a lib/libwbht.so
+lib: lib/libwbht.a lib/libwbht.so lib/libavlht.a lib/libavlht.so
 
 lib/libwbht.so: src/wbht.o
 	$(CC) $(CFLAGS) -shared $? $(LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
+
+lib/libavlht.so: src/avlht.o
+	$(CC) $(CFLAGS) -DAVLHT -shared $? $(LDFLAGS) -o $@
+
+lib/libavlht.a: src/avlht.o
+	$(AR) rs $@ $?
+
+src/avlht.o: src/wbht.c
+	$(CC) $(CFLAGS) -DAVLHT -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
