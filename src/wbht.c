@@ -304,7 +304,7 @@ static inline void local_free(register struct thread* thread, register int64_t* 
 	else
 		*back *= (-1);
 	if(HEAP_LIMIT < *back)
-		heap_insert(&thread->root, (struct heap*)front, *back);
+		thread->root = heap_insert(thread->root, (struct heap*)front, *back);
 	else
 	{
 		*front = *back;
@@ -355,7 +355,7 @@ static inline void* local_shrink(register struct thread* thread, register int64_
 		front += delta;
 		front[-1] = *adjacent + delta;
 		if(HEAP_LIMIT < front[-1])
-			heap_insert(&thread->root, (struct heap*)adjacent, front[-1]);
+			thread->root = heap_insert(thread->root, (struct heap*)adjacent, front[-1]);
 		else
 		{
 			*adjacent = front[-1];
@@ -368,7 +368,7 @@ static inline void* local_shrink(register struct thread* thread, register int64_
 		front += delta;
 		front[-1] = delta;
 		if(HEAP_LIMIT < front[-1])
-			heap_insert(&thread->root, (struct heap*)adjacent, delta);
+			thread->root = heap_insert(thread->root, (struct heap*)adjacent, delta);
 		else
 		{
 			*adjacent = delta;
@@ -461,7 +461,7 @@ static inline void* local_realloc(register struct thread* thread, register int64
 			*adjacent += delta;
 			back -= delta;
 			if(HEAP_LIMIT < *adjacent)
-				heap_insert(&thread->root, (struct heap*)(back + 1), *adjacent);
+				thread->root = heap_insert(thread->root, (struct heap*)(back + 1), *adjacent);
 			else
 			{
 				back[1] = *adjacent;
@@ -478,7 +478,7 @@ static inline void* local_realloc(register struct thread* thread, register int64
 			*back = *front;
 			*adjacent = delta;
 			if(HEAP_LIMIT < delta)
-				heap_insert(&thread->root, (struct heap*)(back + 1), delta);
+				thread->root = heap_insert(thread->root, (struct heap*)(back + 1), delta);
 			else
 			{
 				back[1] = delta;
@@ -606,7 +606,7 @@ static inline void* local_alloc(register struct thread* thread, register int64_t
 		heap = (struct heap*)(page->front + 1);
 		back = page->back - 1;
 		*back = sizeof(page->payload) / sizeof(int64_t);
-		heap_insert(&thread->root, heap, *back);
+		thread->root = heap_insert(thread->root, heap, *back);
 	}
 	else
 		back = heap->size + *heap->size - 1;
