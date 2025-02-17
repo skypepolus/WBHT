@@ -82,9 +82,10 @@ static inline void heap_increase(register struct heap* node, register int64_t in
 		}
 }
 
-static inline void heap_insert(register struct heap** node, register struct heap* insert, register int64_t size)
+static inline struct heap* heap_insert(struct heap* root, register struct heap* insert, register int64_t size)
 {
 	register struct heap* parent = NULL;
+	register struct heap** node = &root;
 	while((*node))
 	{
 		parent = (*node);
@@ -108,6 +109,7 @@ static inline void heap_insert(register struct heap** node, register struct heap
 	insert->size[HEAP_RIGHT] = INT64_MIN;
 	insert->balance = 0;
 	heap_increase(insert, size);
+	return root;
 }
 
 static inline void heap_decrease(register struct heap* node, register int64_t decrease)
