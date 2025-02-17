@@ -27,12 +27,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
+CC=gcc
+CXX=g++
 CFLAGS=-Iinc -fPIC -Ofast
-WBHT_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc,--defsym=reallocf=.wbht.private.wbht_reallocf,--defsym=reallocarray=.wbht.private.wbht_reallocarray,--defsym=aligned_alloc=.wbht.private.wbht_aligned_alloc,--defsym=posix_memalign=.wbht.private.wbht_posix_memalign,--defsym=valloc=.wbht.private.wbht_valloc,--defsym=memalign=.wbht.private.wbht_memalign,--defsym=pvalloc=.wbht.private.wbht_pvalloc
-BTFF_LDFLAGS=-Wl,--defsym=malloc=.wbht.private.btff_malloc,--defsym=calloc=.wbht.private.btff_calloc,--defsym=free=.wbht.private.btff_free,--defsym=realloc=.wbht.private.btff_realloc,--defsym=reallocf=.wbht.private.btff_reallocf,--defsym=reallocarray=.wbht.private.btff_reallocarray,--defsym=aligned_alloc=.wbht.private.btff_aligned_alloc,--defsym=posix_memalign=.wbht.private.btff_posix_memalign,--defsym=valloc=.wbht.private.btff_valloc,--defsym=memalign=.wbht.private.btff_memalign,--defsym=pvalloc=.wbht.private.btff_pvalloc
+LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
+AR=ar
 
 .PHONY: lib
-lib: lib/libwbht.so lib/libbtff.so lib/libbtff-avx512f.so
+lib: lib/libwbht.a lib/libwbht.so lib/libavlht.a lib/libavlht.so
 
 lib/libwbht.so: lib/libwbht.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
@@ -46,22 +48,14 @@ lib/libbtff-avx512f.so: lib/libbtff-avx512f.a
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
 
-lib/libbtff.a: src/btff.o src/btree.o
+lib/libavlht.so: src/avlht.o
+	$(CC) $(CFLAGS) -DAVLHT -shared $? $(LDFLAGS) -o $@
+
+lib/libavlht.a: src/avlht.o
 	$(AR) rs $@ $?
 
-lib/libbtff-avx512f.a: src/btff-avx512f.o src/btree-avx512f.o
-	$(AR) rs $@ $?
-
-.PHONY: test
-test: lib
-	make -C test
-
-.PHONY: bench
-bench: lib
-	make -C bench
-
-%-avx512f.o: %.c
-	$(CC) $(CFLAGS) -DAVX512F -march=native -mavx512f -masm=intel -mtune=intel -c $< -o $@
+src/avlht.o: src/wbht.c
+	$(CC) $(CFLAGS) -DAVLHT -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
