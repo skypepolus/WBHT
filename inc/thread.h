@@ -33,22 +33,37 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "private.h"
 #include "heap.h"
-
+#include "list.h"
+#ifdef __btff_h__
+struct btree;
+#else
+#define HEAP_LIMIT (int64_t)(sizeof(struct heap) / sizeof(int64_t))
+#endif
 struct thread
 {
 	struct thread* next;
 	struct heap* root;
-#ifdef CACHE
-	struct heap** cache;
-#endif
-	int reference;
+	size_t addr;
+	size_t length;
+	int polling;
+#ifdef __btff_h__
+	struct btree* btree;
+	struct btree* local;
+	uint64_t barrier[sizeof(void*) * 15];
+	struct btree* remote;
+#else
 	void** free;
-	unsigned polling;
+	int reference;
+	struct page* local;
+	struct list list[HEAP_LIMIT / 2];
+	uint64_t barrier[sizeof(void*) * 7];
+	struct page* volatile remote;
 	struct
 	{
-		uint8_t barrier[sizeof(void*) * 15];
+		uint8_t barrier[sizeof(void*) * 7];
 		void** free;
 	} channel[1];
+#endif
 };
 
 #endif/*__thread_h__*/

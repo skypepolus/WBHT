@@ -36,8 +36,14 @@ AR=ar
 .PHONY: lib
 lib: lib/libwbht.a lib/libwbht.so lib/libavlht.a lib/libavlht.so
 
-lib/libwbht.so: src/wbht.o
-	$(CC) $(CFLAGS) -shared $? $(LDFLAGS) -o $@
+lib/libwbht.so: lib/libwbht.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
+
+lib/libbtff.so: lib/libbtff.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
+
+lib/libbtff-avx512f.so: lib/libbtff-avx512f.a
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?
@@ -54,17 +60,14 @@ src/avlht.o: src/wbht.c
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.cpp
-	$(CXX) $(CFLAGS) -c $< -o $@
-
 .PHONY: clean
 clean:
-	find . -name "*.[oa]" -exec rm -f {} \;
-	find . -name "*.so" -exec rm -f {} \;
+	find src -name "*.[oa]" -exec rm -f {} \;
+	find lib -name "*.so" -exec rm -f {} \;
 
 .PHONY: dep
 dep:
-	$(CC) $(CFLAGS) -M inc/*.h src/*.c > .dep
+	$(CC) $(CFLAGS) -M src/*.c > .dep
 
 ifeq (1, $(shell if [ -e .dep ]; then echo 1; fi))
 include .dep

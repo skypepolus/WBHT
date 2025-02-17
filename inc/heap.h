@@ -44,7 +44,7 @@ struct heap
 
 enum { HEAP_SIZE, HEAP_PARENT = HEAP_SIZE, HEAP_LEFT, HEAP_RIGHT };
 
-static inline struct heap* heap_first_fit(struct heap* node, int64_t size)
+static inline struct heap* heap_first_fit(register struct heap* node, register int64_t size)
 {
 	while((node))
 		if(size <= node->size[HEAP_SIZE])
@@ -60,9 +60,9 @@ static inline struct heap* heap_first_fit(struct heap* node, int64_t size)
 	return NULL;
 }
 
-static inline void heap_increase(struct heap* node, int64_t increase)
+static inline void heap_increase(register struct heap* node, register int64_t increase)
 {
-	struct heap* parent;
+	register struct heap* parent;
 	for(node->size[HEAP_SIZE] = increase, parent = node->edge[HEAP_PARENT]; 
 		parent; 
 		node = parent, parent = node->edge[HEAP_PARENT])
@@ -82,10 +82,9 @@ static inline void heap_increase(struct heap* node, int64_t increase)
 		}
 }
 
-static inline struct heap* heap_insert(struct heap* root, struct heap* insert, int64_t size)
+static inline void heap_insert(register struct heap** node, register struct heap* insert, register int64_t size)
 {
-	struct heap* parent = NULL;
-	struct heap** node = &root;
+	register struct heap* parent = NULL;
 	while((*node))
 	{
 		parent = (*node);
@@ -109,13 +108,12 @@ static inline struct heap* heap_insert(struct heap* root, struct heap* insert, i
 	insert->size[HEAP_RIGHT] = INT64_MIN;
 	insert->balance = 0;
 	heap_increase(insert, size);
-	return root;
 }
 
-static inline void heap_decrease(struct heap* node, int64_t decrease)
+static inline void heap_decrease(register struct heap* node, register int64_t decrease)
 {
-	struct heap* parent;
-	int64_t size;
+	register struct heap* parent;
+	register int64_t size;
 	for(size = node->size[HEAP_SIZE], node->size[HEAP_SIZE] = decrease, parent = node->edge[HEAP_PARENT]; 
 		parent; 
 		node = parent, parent = node->edge[HEAP_PARENT])
@@ -155,9 +153,9 @@ static inline void heap_decrease(struct heap* node, int64_t decrease)
 		}
 }
 
-static inline struct heap* heap_leaf(struct heap* node)
+static inline struct heap* heap_leaf(register struct heap* node)
 {
-	struct heap* parent = NULL;
+	register struct heap* parent = NULL;
 	while((node))
 	{
 		parent = node;
@@ -175,11 +173,11 @@ static inline struct heap* heap_leaf(struct heap* node)
 	return parent;
 }
 
-static inline void heap_swap(struct heap* node, struct heap* leaf)
+static inline void heap_swap(register struct heap* node, register struct heap* leaf)
 {
-	struct heap* edge;
-	int64_t size;
-	int64_t balance;
+	register struct heap* edge;
+	register int64_t size;
+	register int64_t balance;
 	if(node->edge[HEAP_LEFT] == leaf)
 	{
 		leaf->edge[HEAP_PARENT] = node->edge[HEAP_PARENT];
@@ -275,10 +273,10 @@ static inline void heap_swap(struct heap* node, struct heap* leaf)
 	leaf->balance = balance;
 }
 
-static inline struct heap* heap_remove(struct heap* root, struct heap* remove)
+static inline struct heap* heap_remove(register struct heap* root, register struct heap* remove)
 {
-	struct heap* leaf = heap_leaf(root);
-	struct heap* parent;
+	register struct heap* leaf = heap_leaf(root);
+	register struct heap* parent;
 	if(leaf != remove)
 	{
 		int64_t size;
@@ -311,9 +309,9 @@ static inline struct heap* heap_remove(struct heap* root, struct heap* remove)
 	return NULL;
 }
 
-static inline struct heap* heap_move(struct heap* root, struct heap* dst, struct heap* src)
+static inline struct heap* heap_move(register struct heap* root, register struct heap* dst, register struct heap* src)
 {
-	struct heap* edge;
+	register struct heap* edge;
 	if(root == src)
 		root = dst;
 	if(dst < src)

@@ -28,8 +28,8 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
-#ifndef __page_h__
-#define __page_h__ __page_h__
+#ifndef __btff_h__
+#define __btff_h__ __btff_h__
 
 #include "private.h"
 #include "thread.h"
@@ -40,28 +40,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <unistd.h>
 
-enum {
-	WBHT_LENGTH = PAGE_SIZE * 32,
-	WBHT_ALIGN = WBHT_LENGTH, 
-	WBHT_LIMIT = WBHT_LENGTH - PAGE_SIZE
-};
-
-#define WBHT_LOW ((uint64_t)(WBHT_ALIGN - 1))
-#define WBHT_HIGH (UINT64_MAX - WBHT_LOW)
-
-struct page
-{
-	struct thread* thread;
-	void* root;
-	int64_t front[1];
-	uint8_t payload[WBHT_LENGTH - sizeof(struct thread*) - sizeof(void*) - sizeof(int64_t) - sizeof(int64_t) - sizeof(struct page*) - sizeof(void**)];
-	int64_t back[1];
-	struct page* volatile next;
-	void** volatile free;
-};
-
-#define WBHT_PRINTF(stream, format...) \
+#define BTFF_PRINTF(stream, format...) \
 do \
 { \
 	char* str = (char*)MAP_FAILED; \
@@ -83,7 +64,7 @@ do \
 } while(0)
 
 #ifndef __OPTIMIZE__
-#define WBHT_ASSERT(expression) \
+#define BTFF_ASSERT(expression) \
 do \
 { \
 	if(unlikely(!(expression))) \
@@ -109,7 +90,7 @@ do \
 		} \
 } while(0)
 #else
-#define WBHT_ASSERT(expression) \
+#define BTFF_ASSERT(expression) \
 do \
 { \
 	if(!(expression)) \
@@ -118,17 +99,27 @@ do \
 } while(0)
 #endif
 
-static inline struct page* WBHT_PAGE(void* ptr)
-{
-	struct page* page;
-	if(WBHT_LIMIT <= (WBHT_LOW & (uint64_t)ptr))
-		page = (struct page*)(PAGE_MASK & (uint64_t)ptr);
-	else
-		page = (struct page*)((WBHT_HIGH & (uint64_t)ptr) - PAGE_SIZE);
-#ifndef __OPTIMIZE__
-	assert(page->front < (int64_t*)ptr && (int64_t*)ptr < page->back);
-#endif
-	return page;
-}
+void *btff_malloc(size_t size)
+	PRIVATE(btff_malloc);
+void btff_free(void *ptr)
+	PRIVATE(btff_free);
+void* btff_calloc(size_t count, size_t size)
+	PRIVATE(btff_calloc);
+void* btff_realloc(void *ptr, size_t size)
+	PRIVATE(btff_realloc);
+void* btff_reallocf(void *ptr, size_t size)
+	PRIVATE(btff_reallocf);
+void *btff_reallocarray(void *ptr, size_t nmemb, size_t size)
+	PRIVATE(btff_reallocarray);
+void* btff_aligned_alloc(size_t alignment, size_t size)
+	PRIVATE(btff_aligned_alloc);
+int btff_posix_memalign(void **memptr, size_t alignment, size_t size)
+	PRIVATE(btff_posix_memalign);
+void* btff_valloc(size_t size)
+	PRIVATE(btff_valloc);
+void* btff_memalign(size_t alignment, size_t size)
+	PRIVATE(btff_memalign);
+void* btff_pvalloc(size_t alignment, size_t size)
+	PRIVATE(btff_pvalloc);
 
-#endif/*__page_h__*/
+#endif/*__btff_h__*/
