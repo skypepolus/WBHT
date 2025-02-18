@@ -30,14 +30,14 @@
 CC=gcc
 CXX=g++
 CFLAGS=-Iinc -fPIC -Ofast
-LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc
+LDFLAGS=-Wl,--defsym=malloc=.wbht.private.wbht_malloc,--defsym=calloc=.wbht.private.wbht_calloc,--defsym=free=.wbht.private.wbht_free,--defsym=realloc=.wbht.private.wbht_realloc,--defsym=aligned_alloc=.wbht.private.wbht_aligned_alloc,--defsym=memalign=.wbht.private.wbht_memalign,--defsym=posix_memalign=.wbht.private.wbht_posix_memalign,--defsym=pvalloc=.wbht.private.wbht_pvalloc,--defsym=reallocarray=.wbht.private.wbht_reallocarray,--defsym=reallocf=.wbht.private.wbht_reallocf,--defsym=valloc=.wbht.private.wbht_valloc
 AR=ar
 
 .PHONY: lib
 lib: lib/libwbht.a lib/libwbht.so lib/libavlht.a lib/libavlht.so
 
 lib/libwbht.so: lib/libwbht.a
-	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
+	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(LDFLAGS) -o $@
 
 #lib/libbtff.so: lib/libbtff.a
 #	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
