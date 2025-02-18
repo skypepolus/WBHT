@@ -39,11 +39,11 @@ lib: lib/libwbht.a lib/libwbht.so lib/libavlht.a lib/libavlht.so
 lib/libwbht.so: lib/libwbht.a
 	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(WBHT_LDFLAGS) -o $@
 
-lib/libbtff.so: lib/libbtff.a
-	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
+#lib/libbtff.so: lib/libbtff.a
+#	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
-lib/libbtff-avx512f.so: lib/libbtff-avx512f.a
-	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
+#lib/libbtff-sse.so: lib/libbtff-sse.a
+#	$(CC) -shared -Wl,--whole-archive $? -Wl,--no-whole-archive $(BTFF_LDFLAGS) -o $@
 
 lib/libwbht.a: src/wbht.o
 	$(AR) rs $@ $?

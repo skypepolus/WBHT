@@ -75,12 +75,15 @@ void heap_print(struct heap* node, int tab)
 		heap_print(node->edge[HEAP_RIGHT], tab + 1);
 		for(i = 0; i < tab; i++) 
 			write(fileno(stderr), "  ", 2);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
 		if(0 < (count = snprintf(tmp, sizeof(tmp), "%ld-%ld/%ld/%ld\n", node->size[HEAP_SIZE], node->balance, node->size[HEAP_LEFT], node->size[HEAP_RIGHT])))
 		{
 			char buf[count + 1];
 			if(count == snprintf(buf, sizeof(buf), "%ld-%ld/%ld/%ld\n", node->size[HEAP_SIZE], node->balance, node->size[HEAP_LEFT], node->size[HEAP_RIGHT]))
 				write(fileno(stderr), buf, count);
 		}
+#pragma GCC diagnostic pop
 		heap_print(node->edge[HEAP_LEFT], tab + 1);
 	}
 }
@@ -500,33 +503,29 @@ static inline struct page* local_page(struct thread* thread, size_t align)
 	{
 		struct page* page;
 		size_t length;
-		size_t addr = thread->addr + PAGE_SIZE + WBHT_ALIGN - 1 & ~(WBHT_ALIGN - 1);
+		size_t addr = thread->addr + thread->length & ~(WBHT_ALIGN - 1);
 		void* ptr;
-
-		if(PAGE_SIZE <= addr - thread->addr && addr <= thread->addr + thread->length)
+		if(thread->addr + thread->length < addr - PAGE_SIZE + WBHT_LENGTH)
+			addr -= WBHT_LENGTH;
+		if(thread->addr <= addr - PAGE_SIZE && addr - PAGE_SIZE + WBHT_LENGTH <= thread->addr + thread->length)
 		{
 			page = (struct page*)(addr - PAGE_SIZE);
 			addr = (size_t)page + WBHT_LENGTH;
-			if(addr <= thread->addr + thread->length)
+			if(0 < (length = thread->addr + thread->length - addr))
 			{
-				if(thread->addr < (size_t)page)
-				{
-					length = (size_t)page - thread->addr;
-					WBHT_ASSERT(0 == munmap((void*)thread->addr, length));
-				}
-				WBHT_ASSERT(0 == mprotect((void*)page, WBHT_LENGTH, PROT_READ|PROT_WRITE));
-				length = addr - thread->addr;
-				thread->addr += length;
+				WBHT_ASSERT(0 == munmap((void*)addr, length));
 				thread->length -= length;
-				((struct page*)page)->thread = thread;
-				((struct page*)page)->next = MAP_FAILED;
-				thread->reference++;
-				return (struct page*)page;
 			}
+			WBHT_ASSERT(0 == mprotect((void*)page, WBHT_LENGTH, PROT_READ|PROT_WRITE));
+			thread->length -= WBHT_LENGTH;
+			((struct page*)page)->thread = thread;
+			((struct page*)page)->next = MAP_FAILED;
+			thread->reference++;
+			return (struct page*)page;
 		}
 		if(0 < thread->length)
 			WBHT_ASSERT(0 == munmap((void*)thread->addr, thread->length));
-		length = PAGE_SIZE * 1024;
+		length = 1024 * 1024 * 1024;
 		if(MAP_FAILED == (ptr = mmap(NULL, length, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)))
 		{
 			thread->length = 0;
