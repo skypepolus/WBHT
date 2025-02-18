@@ -1,5 +1,5 @@
 # Dynamic Memory Allocation with Weight Balanced Heap Tree
-This is a variant of Brent's algorithm.[1] The differences are as below.
+These are two variants of Brent's algorithm.[1] The differences are as below.
 1. Eliminating additional tree utilizing payload area.
 2. The tree grows or shrinks dynamically, always keeping balance using weight of sub trees.
 2. Eliminating linked list, using paging.
@@ -14,6 +14,8 @@ External fragmentation is chosen over internal fragmentation, because external f
 MacBookPro 16-inch, 2019/Parellels Desktop 20/Ubuntu 22.04.5 LTS/mimalloc-bench.[2]
 1. Processors 4
 2. Adaptive Hypervisor (Apple)
+wbht	Weight Balanced Heap Tree
+avlht	AVL Heap Tree
 
  test    alloc   time  rss    user  sys  page-faults page-reclaims<br>
 cfrac       sys   05.73 3072 5.72 0.00 1 424<br>
